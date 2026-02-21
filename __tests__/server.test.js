@@ -54,7 +54,7 @@ describe('Server API Endpoints', () => {
         .expect(200);
 
       expect(response.text).toContain('Copilot Session Viewer');
-      expect(mockSessionService.getPaginatedSessions).toHaveBeenCalledWith(1, 20);
+      expect(mockSessionService.getPaginatedSessions).toHaveBeenCalledWith(1, 100);
     });
 
     it('should render homepage with initial sessions (infinite scroll)', async () => {
@@ -78,7 +78,7 @@ describe('Server API Endpoints', () => {
 
       expect(response.text).toContain('Sessions');
       expect(response.text).toContain('Load More Sessions');
-      expect(mockSessionService.getPaginatedSessions).toHaveBeenCalledWith(1, 20);
+      expect(mockSessionService.getPaginatedSessions).toHaveBeenCalledWith(1, 100);
     });
 
     it('should ignore legacy pagination parameters', async () => {
@@ -101,7 +101,7 @@ describe('Server API Endpoints', () => {
         .expect(200);
 
       // Should still load initial batch, ignoring pagination params
-      expect(mockSessionService.getPaginatedSessions).toHaveBeenCalledWith(1, 20);
+      expect(mockSessionService.getPaginatedSessions).toHaveBeenCalledWith(1, 100);
     });
 
     it('should handle session loading errors', async () => {

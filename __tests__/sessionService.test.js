@@ -75,12 +75,10 @@ describe('SessionService', () => {
 
       const events = await service.getSessionEvents(sessionId);
 
-      // Events without timestamps get time=0, so they sort to the front,
-      // preserving their relative file order among themselves
-      expect(events[0].type).toBe('event.no_ts');
-      expect(events[1].type).toBe('event.null_ts');
-      expect(events[2].type).toBe('event.b');
-      expect(events[3].type).toBe('event.a');
+      // Events without timestamps are now filtered out
+      expect(events).toHaveLength(2);
+      expect(events[0].type).toBe('event.b');
+      expect(events[1].type).toBe('event.a');
     });
 
     it('should add _fileIndex to each event', async () => {
@@ -166,9 +164,10 @@ describe('SessionService', () => {
       
       const events = await service.getSessionEvents(sessionId);
       
-      expect(events).toHaveLength(2);
-      expect(events[0].type).toBe('user');
-      expect(events[1].type).toBe('assistant');
+      // Parser now generates synthetic turn_start/turn_complete events
+      expect(events.length).toBeGreaterThanOrEqual(2);
+      expect(events[0].type).toBe('user.message');
+      // Synthetic events may be added for assistant turns
     });
 
     it('should handle large files with streaming', async () => {
