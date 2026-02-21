@@ -919,14 +919,30 @@
   
   <!-- Vue App -->
   <script>
-    const { createApp, ref, computed, onMounted, onBeforeUnmount, reactive, watch } = Vue;
-    const { DynamicScroller, DynamicScrollerItem } = window.VueVirtualScroller;
-    
-    const app = createApp({
-      components: {
-        DynamicScroller,
-        DynamicScrollerItem
-      },
+    // Wait for DOM and all resources to be ready
+    document.addEventListener('DOMContentLoaded', function() {
+      // Verify Vue is loaded
+      if (typeof Vue === 'undefined') {
+        console.error('Vue is not loaded');
+        return;
+      }
+
+      // Verify VueVirtualScroller is loaded
+      if (typeof window.VueVirtualScroller === 'undefined') {
+        console.error('VueVirtualScroller is not loaded');
+        return;
+      }
+
+      console.log('Initializing Vue app...');
+
+      const { createApp, ref, computed, onMounted, onBeforeUnmount, reactive, watch } = Vue;
+      const { DynamicScroller, DynamicScrollerItem } = window.VueVirtualScroller;
+
+      const app = createApp({
+        components: {
+          DynamicScroller,
+          DynamicScrollerItem
+        },
       
       setup() {
         const sessionId = ref(window.sessionData.sessionId);
@@ -2368,8 +2384,12 @@
         </div>
       `
     });
-    
+
+    // Mount the app
+    console.log('Mounting Vue app to #app...');
     app.mount('#app');
+    console.log('Vue app mounted successfully!');
+  }); // End DOMContentLoaded
   </script>
 </body>
 </html>
