@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Session Timeline: <%= sessionId %></title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3.4.15/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+    }
+
+    .header {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #58a6ff;
+    }
+
+    .back-link {
+      color: #58a6ff;
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .summary-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 16px;
+    }
+
+    .card-label {
+      font-size: 12px;
+      color: #8b949e;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    .card-value {
+      font-size: 24px;
+      font-weight: 600;
+      color: #58a6ff;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid #30363d;
+    }
+
+    .tab {
+      padding: 12px 16px;
+      background: none;
+      border: none;
+      color: #8b949e;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+
+    .tab.active {
+      color: #58a6ff;
+      border-bottom-color: #58a6ff;
+    }
+
+    .tab:hover {
+      color: #c9d1d9;
+    }
+
+    .turn {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .turn-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .turn-id {
+      font-weight: 600;
+      color: #58a6ff;
+    }
+
+    .turn-duration {
+      font-size: 12px;
+      color: #8b949e;
+    }
+
+    .turn-message {
+      color: #c9d1d9;
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
+
+    .tools-section {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #30363d;
+    }
+
+    .tools-header {
+      font-size: 12px;
+      color: #8b949e;
+      margin-bottom: 8px;
+    }
+
+    .tool {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 13px;
+    }
+
+    .tool-name {
+      color: #79c0ff;
+      font-weight: 600;
+    }
+
+    .tool-status {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .tool-status.completed {
+      background: rgba(46, 160, 67, 0.2);
+      color: #3fb950;
+    }
+
+    .tool-status.running {
+      background: rgba(187, 128, 9, 0.2);
+      color: #d29922;
+    }
+
+    .tool-status.error {
+      background: rgba(248, 81, 73, 0.2);
+      color: #f85149;
+    }
+
+    .tool-duration {
+      color: #8b949e;
+      font-size: 11px;
+      margin-left: 8px;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 48px;
+      color: #8b949e;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 48px;
+    }
+
+    .error {
+      background: rgba(248, 81, 73, 0.1);
+      border: 1px solid rgba(248, 81, 73, 0.4);
+      color: #f85149;
+      padding: 16px;
+      border-radius: 6px;
+      margin-bottom: 24px;
+    }
+
+    .gantt-container {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 24px;
+      overflow-x: auto;
+    }
+
+    .gantt-row {
+      display: flex;
+      align-items: center;
+      min-height: 40px;
+      border-bottom: 1px solid #21262d;
+    }
+
+    .gantt-label {
+      width: 150px;
+      flex-shrink: 0;
+      font-size: 13px;
+      color: #8b949e;
+      padding-right: 16px;
+    }
+
+    .gantt-bar-area {
+      flex: 1;
+      position: relative;
+      height: 32px;
+    }
+
+    .gantt-bar {
+      position: absolute;
+      height: 24px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      font-size: 11px;
+      color: white;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .gantt-bar.turn {
+      background: #1f6feb;
+    }
+
+    .gantt-bar.tool {
+      background: #d29922;
+      height: 16px;
+    }
+
+    .gantt-timeline {
+      display: flex;
+      margin-bottom: 8px;
+      padding-left: 150px;
+    }
+
+    .gantt-tick {
+      flex: 1;
+      text-align: center;
+      font-size: 11px;
+      color: #8b949e;
+      border-left: 1px solid #21262d;
+      padding: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="header">
+      <h1>⏱ Analysis: {{ sessionId }}</h1>
+      <a :href="'/session/' + sessionId" class="back-link">← Back to Session</a>
+    </div>
+
+    <div class="container">
+      <!-- Error Display -->
+      <div v-if="error" class="error">
+        {{ error }}
+      </div>
+
+      <!-- Loading State -->
+      <div v-if="loading" class="loading">
+        Loading timeline data...
+      </div>
+
+      <!-- Content -->
+      <template v-if="!loading && !error">
+        <!-- Summary Cards -->
+        <div class="summary-cards">
+          <div class="card">
+            <div class="card-label">Total Duration</div>
+            <div class="card-value">{{ formatDuration(totalDuration) }}</div>
+          </div>
+          <div class="card">
+            <div class="card-label">User Requests</div>
+            <div class="card-value">{{ timeline.summary.totalTurns }}</div>
+          </div>
+          <div class="card">
+            <div class="card-label">Tool Calls</div>
+            <div class="card-value">{{ timeline.summary.totalTools }}</div>
+          </div>
+          <div class="card">
+            <div class="card-label">Sub-Agents</div>
+            <div class="card-value">{{ timeline.summary.totalSubagents }}</div>
+          </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+          <button :class="['tab', { active: activeTab === 'timeline' }]" @click="activeTab = 'timeline'">
+            📊 Timeline
+          </button>
+          <button :class="['tab', { active: activeTab === 'gantt' }]" @click="activeTab = 'gantt'">
+            📈 Gantt Chart
+          </button>
+        </div>
+
+        <!-- Timeline Tab -->
+        <div v-if="activeTab === 'timeline'">
+          <div v-if="!timeline.turns.length" class="empty-state">
+            No timeline data found in this session.
+          </div>
+          <div v-else>
+            <div v-for="turn in timeline.turns" :key="turn.id" class="turn">
+              <div class="turn-header">
+                <span class="turn-id">{{ turn.id }}</span>
+                <span class="turn-duration">{{ formatTimestamp(turn.startTime) }} • {{ formatDuration(getDuration(turn.startTime, turn.endTime)) }}</span>
+              </div>
+              <div class="turn-message">{{ turn.message }}</div>
+              
+              <!-- Assistant Turns (grouped by assistant message) -->
+              <div v-if="turn.assistantTurns && turn.assistantTurns.length" class="tools-section">
+                <div class="tools-header" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" @click="toggleTurn(turn.id)">
+                  <span>Assistant Turns ({{ turn.assistantTurns.length }})</span>
+                  <span style="font-size: 16px;">{{ expandedTurns[turn.id] ? '▼' : '▶' }}</span>
+                </div>
+                <div v-show="expandedTurns[turn.id]">
+                  <div v-for="(assistantTurn, aidx) in turn.assistantTurns" :key="aidx" style="margin-bottom: 12px;">
+                    <div style="font-size: 12px; color: #8b949e; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                      <span>{{ assistantTurn.id }} • {{ formatTimestamp(assistantTurn.startTime) }} • {{ assistantTurn.tools.length }} tools</span>
+                      <button style="background: none; border: 1px solid #30363d; color: #8b949e; padding: 2px 8px; border-radius: 3px; font-size: 11px; cursor: pointer;" @click.stop="toggleAssistantTurn(turn.id, aidx)">
+                        {{ expandedAssistantTurns[`${turn.id}-${aidx}`] ? 'Hide' : 'Show' }}
+                      </button>
+                    </div>
+                    <div v-show="expandedAssistantTurns[`${turn.id}-${aidx}`]">
+                      <div v-for="(tool, tidx) in assistantTurn.tools" :key="tidx" class="tool">
+                        <span class="tool-name">{{ tool.name }}</span>
+                        <span v-if="tool.status !== 'completed'" :class="['tool-status', tool.status]">{{ tool.status }}</span>
+                        <span class="tool-duration">{{ formatDuration(getDuration(tool.startTime, tool.endTime)) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Legacy: Direct tools array (for Copilot compatibility) -->
+              <div v-else-if="turn.tools && turn.tools.length" class="tools-section">
+                <div class="tools-header" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" @click="toggleTurn(turn.id)">
+                  <span>Tools ({{ turn.tools.length }})</span>
+                  <span style="font-size: 16px;">{{ expandedTurns[turn.id] ? '▼' : '▶' }}</span>
+                </div>
+                <div v-show="expandedTurns[turn.id]">
+                  <div v-for="(tool, idx) in turn.tools" :key="idx" class="tool">
+                    <span class="tool-name">{{ tool.name }}</span>
+                    <span v-if="tool.status !== 'completed'" :class="['tool-status', tool.status]">{{ tool.status }}</span>
+                    <span class="tool-duration">{{ formatDuration(getDuration(tool.startTime, tool.endTime)) }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gantt Tab -->
+        <div v-if="activeTab === 'gantt'">
+          <div v-if="!timeline.turns.length" class="empty-state">
+            No timeline data to display.
+          </div>
+          <div v-else class="gantt-container">
+            <!-- Timeline ticks -->
+            <div class="gantt-timeline">
+              <div v-for="tick in 10" :key="tick" class="gantt-tick">
+                {{ formatTimestamp(timeline.summary.startTime, tick * 10) }}
+              </div>
+            </div>
+            
+            <!-- Gantt rows -->
+            <div v-for="turn in timeline.turns" :key="turn.id" class="gantt-row">
+              <div class="gantt-label">{{ turn.id }}</div>
+              <div class="gantt-bar-area">
+                <div class="gantt-bar turn" :style="getGanttPosition(turn.startTime, turn.endTime)">
+                  {{ turn.id }}
+                </div>
+                <!-- Pi-Mono: AssistantTurns with tools -->
+                <template v-if="turn.assistantTurns">
+                  <template v-for="(assistantTurn, aidx) in turn.assistantTurns" :key="'at-' + aidx">
+                    <div v-for="(tool, tidx) in assistantTurn.tools" :key="'t-' + aidx + '-' + tidx" 
+                         class="gantt-bar tool" 
+                         :style="getGanttPosition(tool.startTime, tool.endTime)">
+                      {{ tool.name }}
+                    </div>
+                  </template>
+                </template>
+                <!-- Legacy: Direct tools array (Copilot) -->
+                <template v-else>
+                  <div v-for="(tool, idx) in turn.tools" :key="idx" 
+                       class="gantt-bar tool" 
+                       :style="getGanttPosition(tool.startTime, tool.endTime)">
+                    {{ tool.name }}
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const sessionId = ref('<%= sessionId %>');
+        const timeline = ref({ turns: [], summary: {} });
+        const loading = ref(true);
+        const error = ref(null);
+        const activeTab = ref('timeline');
+        const expandedTurns = ref({});
+        const expandedAssistantTurns = ref({});
+
+        const toggleTurn = (turnId) => {
+          expandedTurns.value[turnId] = !expandedTurns.value[turnId];
+        };
+
+        const toggleAssistantTurn = (turnId, assistantIdx) => {
+          const key = `${turnId}-${assistantIdx}`;
+          expandedAssistantTurns.value[key] = !expandedAssistantTurns.value[key];
+        };
+
+        const totalDuration = computed(() => {
+          if (!timeline.value.summary.startTime || !timeline.value.summary.endTime) return 0;
+          return new Date(timeline.value.summary.endTime) - new Date(timeline.value.summary.startTime);
+        });
+
+        const formatDuration = (ms) => {
+          if (!ms || ms < 0) return '0s';
+          const seconds = Math.floor(ms / 1000);
+          const minutes = Math.floor(seconds / 60);
+          const hours = Math.floor(minutes / 60);
+          
+          if (hours > 0) {
+            return `${hours}h ${minutes % 60}m`;
+          } else if (minutes > 0) {
+            return `${minutes}m ${seconds % 60}s`;
+          } else {
+            return `${seconds}s`;
+          }
+        };
+
+        const formatTimestamp = (timestamp, percentOffset = 0) => {
+          if (!timestamp) return '';
+          const date = new Date(timestamp);
+          if (percentOffset > 0 && timeline.value.summary.startTime) {
+            const start = new Date(timeline.value.summary.startTime).getTime();
+            const duration = totalDuration.value;
+            const offsetMs = (duration * percentOffset) / 100;
+            date.setTime(start + offsetMs);
+          }
+          return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        };
+
+        const getDuration = (start, end) => {
+          if (!start || !end) return 0;
+          return new Date(end) - new Date(start);
+        };
+
+        const getGanttPosition = (startTime, endTime) => {
+          if (!timeline.value.summary.startTime || !startTime) return { left: '0%', width: '0%' };
+          
+          const sessionStart = new Date(timeline.value.summary.startTime).getTime();
+          const sessionDuration = totalDuration.value;
+          const start = new Date(startTime).getTime();
+          const end = endTime ? new Date(endTime).getTime() : start + 1000;
+          
+          const left = ((start - sessionStart) / sessionDuration) * 100;
+          const width = Math.max(((end - start) / sessionDuration) * 100, 0.5);
+          
+          return {
+            left: Math.max(0, left) + '%',
+            width: Math.min(width, 100 - left) + '%'
+          };
+        };
+
+        onMounted(async () => {
+          try {
+            const resp = await fetch(`/api/sessions/${sessionId.value}/timeline`);
+            if (!resp.ok) throw new Error('Failed to load timeline: ' + resp.statusText);
+            timeline.value = await resp.json();
+          } catch (err) {
+            error.value = err.message;
+          } finally {
+            loading.value = false;
+          }
+        });
+
+        return {
+          sessionId,
+          timeline,
+          loading,
+          error,
+          activeTab,
+          expandedTurns,
+          expandedAssistantTurns,
+          toggleTurn,
+          toggleAssistantTurn,
+          totalDuration,
+          formatDuration,
+          formatTimestamp,
+          getDuration,
+          getGanttPosition
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

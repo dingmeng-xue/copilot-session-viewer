@@ -1,13 +1,20 @@
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
+const readline = require('readline');
 const { isValidSessionId, buildMetadata } = require('../utils/helpers');
 const SessionRepository = require('./sessionRepository');
 
 class SessionService {
   constructor(sessionDir) {
-    this.SESSION_DIR = sessionDir || process.env.SESSION_DIR || path.join(os.homedir(), '.copilot', 'session-state');
-    this.sessionRepository = new SessionRepository(this.SESSION_DIR);
+    // If sessionDir is provided, use it (for backward compatibility)
+    // Otherwise, use SessionRepository's default multi-source configuration
+    if (sessionDir) {
+      this.SESSION_DIR = sessionDir;
+      this.sessionRepository = new SessionRepository(sessionDir);
+    } else {
+      // Use default configuration (Copilot + Claude + Pi-Mono)
+      this.sessionRepository = new SessionRepository();
+    }
   }
 
   async getAllSessions() {
@@ -47,56 +54,869 @@ class SessionService {
       return [];
     }
 
-    const sessionPath = path.join(this.SESSION_DIR, sessionId);
-    let eventsFile;
-
-    try {
-      const stats = await fs.promises.stat(sessionPath);
-      if (stats.isDirectory()) {
-        eventsFile = path.join(sessionPath, 'events.jsonl');
-      } else {
-        eventsFile = path.join(this.SESSION_DIR, `${sessionId}.jsonl`);
-      }
-    } catch (_err) {
-      eventsFile = path.join(this.SESSION_DIR, `${sessionId}.jsonl`);
-    }
-
-    try {
-      await fs.promises.access(eventsFile);
-    } catch (_err) {
+    // First, find the session to get its source and type
+    const session = await this.sessionRepository.findById(sessionId);
+    if (!session) {
       return [];
     }
 
-    try {
-      const content = await fs.promises.readFile(eventsFile, 'utf-8');
-      const lines = content.trim().split('\n').filter(line => line.trim());
-      const events = lines.map((line, index) => {
-        try {
-          const event = JSON.parse(line);
-          // Preserve original file order as _fileIndex for stable sorting
-          event._fileIndex = index;
-          return event;
-        } catch (err) {
-          console.error(`Error parsing line ${index + 1}:`, err.message);
-          return null;
-        }
-      }).filter(event => event !== null);
 
-      // Sort by timestamp with stable tiebreaker on original file order.
-      // This ensures events with identical timestamps (e.g. an assistant.message
-      // followed by its tool.execution_start events) keep their logical order.
+    // Determine the file path based on source
+    let eventsFile;
+    
+    if (session.source === 'copilot') {
+      // Copilot format: directory/events.jsonl or sessionId.jsonl
+      if (this.SESSION_DIR) {
+        // Single-source mode (backward compatibility)
+        const sessionPath = path.join(this.SESSION_DIR, sessionId);
+        try {
+          const stats = await fs.promises.stat(sessionPath);
+          if (stats.isDirectory()) {
+            eventsFile = path.join(sessionPath, 'events.jsonl');
+          } else {
+            eventsFile = path.join(this.SESSION_DIR, `${sessionId}.jsonl`);
+          }
+        } catch (_err) {
+          eventsFile = path.join(this.SESSION_DIR, `${sessionId}.jsonl`);
+        }
+      } else {
+        // Multi-source mode
+        const copilotSource = this.sessionRepository.sources.find(s => s.type === 'copilot');
+        if (!copilotSource) return [];
+        
+        const sessionPath = path.join(copilotSource.dir, sessionId);
+        try {
+          const stats = await fs.promises.stat(sessionPath);
+          if (stats.isDirectory()) {
+            eventsFile = path.join(sessionPath, 'events.jsonl');
+          } else {
+            eventsFile = path.join(copilotSource.dir, `${sessionId}.jsonl`);
+          }
+        } catch (_err) {
+          eventsFile = path.join(copilotSource.dir, `${sessionId}.jsonl`);
+        }
+      }
+    } else if (session.source === 'claude') {
+      // Claude format: projects/*/sessionId.jsonl
+      const claudeSource = this.sessionRepository.sources.find(s => s.type === 'claude');
+      if (!claudeSource) return [];
+      
+      // If session type is 'directory', it's a subagents-only session (no main file)
+      // Skip main file search and load only subagents
+      if (session.type !== 'directory') {
+        // Search all project directories for this session
+        try {
+          const projects = await fs.promises.readdir(claudeSource.dir);
+          for (const project of projects) {
+            const candidateFile = path.join(claudeSource.dir, project, `${sessionId}.jsonl`);
+            try {
+              await fs.promises.access(candidateFile);
+              eventsFile = candidateFile;
+              break;
+            } catch {
+              // Not in this project, continue
+            }
+          }
+        } catch (err) {
+          console.error('Error searching Claude projects:', err);
+          return [];
+        }
+      }
+    } else if (session.source === 'pi-mono') {
+      // Pi-Mono format: sessions/--project-path--/timestamp_uuid.jsonl
+      const piMonoSource = this.sessionRepository.sources.find(s => s.type === 'pi-mono');
+      if (!piMonoSource) return [];
+
+      // Search all project directories for this session ID
+      try {
+        const projects = await fs.promises.readdir(piMonoSource.dir);
+        for (const project of projects) {
+          const projectPath = path.join(piMonoSource.dir, project);
+          try {
+            const files = await fs.promises.readdir(projectPath);
+            const matchingFile = files.find(f => f.includes(`_${sessionId}.jsonl`));
+            if (matchingFile) {
+              eventsFile = path.join(projectPath, matchingFile);
+              break;
+            }
+          } catch {
+            // Not a directory or can't read
+          }
+        }
+      } catch (err) {
+        console.error('Error searching Pi-Mono sessions:', err);
+        return [];
+      }
+    }
+
+
+    // Initialize events array
+    let events = [];
+    
+    // Load main events file if it exists
+    if (eventsFile) {
+      try {
+        await fs.promises.access(eventsFile);
+        
+        // Stream-based reading: supports files of any size
+        const fileStream = fs.createReadStream(eventsFile, { encoding: 'utf-8' });
+        const rl = readline.createInterface({
+          input: fileStream,
+          crlfDelay: Infinity // Treat \r\n as single line break
+        });
+        
+        let lineIndex = 0;
+        const parsedEvents = [];
+        
+        for await (const line of rl) {
+          const trimmedLine = line.trim();
+          if (trimmedLine) {
+            try {
+              const event = JSON.parse(trimmedLine);
+              event._fileIndex = lineIndex;
+              parsedEvents.push(event);
+            } catch (err) {
+              console.error(`Error parsing line ${lineIndex + 1}:`, err.message);
+            }
+          }
+          lineIndex++;
+        }
+        
+        events = parsedEvents;
+
+        // Sort by timestamp with stable tiebreaker on original file order
+        events.sort((a, b) => {
+          const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+          const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          if (timeA !== timeB) return timeA - timeB;
+          return a._fileIndex - b._fileIndex;
+        });
+
+        // Normalize events to unified format (convert Claude format to standard)
+        const normalizedEvents = events.map(event => this._normalizeEvent(event, session.source));
+        events = normalizedEvents;
+        
+        // Match tool calls across events (source-specific)
+        if (session.source === 'copilot') {
+          this._matchCopilotToolCalls(events);
+        } else if (session.source === 'claude') {
+          this._matchClaudeToolResults(events);
+        }
+      } catch (err) {
+        console.error('Error reading main events file:', err);
+        // Continue to load subagents even if main file fails
+      }
+    }
+    
+    // Load and merge sub-agent events (for both Copilot and Claude)
+    // For Claude sessions without main events.jsonl, this will load subagents from correct path
+    await this._mergeSubAgentEvents(events, eventsFile, sessionId, session.source);
+    
+    // Re-run tool matching after merging subagents (subagent events need matching too)
+    if (session.source === 'copilot') {
+      this._matchCopilotToolCalls(events);
+      events = this._expandCopilotToTimelineFormat(events);
+    } else if (session.source === 'claude') {
+      this._matchClaudeToolResults(events);
+      events = this._expandClaudeToTimelineFormat(events);
+    } else if (session.source === 'pi-mono') {
+      this._matchPiMonoToolResults(events);
+      // Expand Pi-Mono format to Copilot-compatible event stream
+      events = this._expandPiMonoToCopilotFormat(events);
+    }
+    
+    // Clean up events for timeline rendering
+    events = events.filter(e => {
+      // Keep events with valid timestamps
+      const ts = e.timestamp || e.snapshot?.timestamp;
+      if (!ts) {
+        console.warn('[SessionService] Filtered event without timestamp:', e.type, e.id || e._fileIndex);
+        return false;
+      }
+      return true;
+    });
+    
+    // Fix fileIndex for subagent events (999999 is too large and breaks sorting)
+    events.forEach(e => {
+      if (e._fileIndex === 999999 && e.timestamp) {
+        // Use timestamp for sorting instead
+        delete e._fileIndex;
+      }
+    });
+    
+    return events;
+  }
+
+  /**
+   * Load and merge sub-agent events into main event stream
+   * @private
+   * @param {Array} events - Main events array
+   * @param {string|null} mainEventsFile - Path to main events file (null if doesn't exist)
+   * @param {string} sessionId - Session ID
+   * @param {string} source - Session source ('copilot' or 'claude')
+   */
+  async _mergeSubAgentEvents(events, mainEventsFile, sessionId, source) {
+    let subagentsDir;
+    
+    if (source === 'claude') {
+      // For Claude sessions, look in .claude/projects/*/sessionId/subagents
+      const claudeSource = this.sessionRepository.sources.find(s => s.type === 'claude');
+      if (!claudeSource) return;
+      
+      try {
+        const projects = await fs.promises.readdir(claudeSource.dir);
+        for (const project of projects) {
+          const candidateDir = path.join(claudeSource.dir, project, sessionId, 'subagents');
+          try {
+            const stats = await fs.promises.stat(candidateDir);
+            if (stats.isDirectory()) {
+              subagentsDir = candidateDir;
+              break;
+            }
+          } catch {
+            // Not in this project, continue
+          }
+        }
+      } catch (err) {
+        console.error('Error searching Claude subagents:', err);
+        return;
+      }
+    } else if (source === 'copilot' && mainEventsFile) {
+      // For Copilot sessions, detect from main events file path
+      const eventsDir = path.dirname(mainEventsFile);
+      const eventsBasename = path.basename(mainEventsFile);
+      
+      if (eventsBasename === 'events.jsonl') {
+        // .copilot/session-state/<sessionId>/events.jsonl → check <sessionId>/subagents
+        subagentsDir = path.join(eventsDir, 'subagents');
+      } else {
+        // <sessionId>.jsonl alongside session directory → check <parent>/<sessionId>/subagents
+        subagentsDir = path.join(eventsDir, sessionId, 'subagents');
+      }
+    }
+    
+    if (!subagentsDir) {
+      return;
+    }
+    
+    try {
+      const stats = await fs.promises.stat(subagentsDir);
+      if (!stats.isDirectory()) {
+        return;
+      }
+    } catch (err) {
+      // No subagents directory
+      return;
+    }
+    
+    try {
+      const files = await fs.promises.readdir(subagentsDir);
+      const subagentFiles = files.filter(f => f.startsWith('agent-') && f.endsWith('.jsonl'));
+      
+      if (subagentFiles.length === 0) return;
+      
+      // Process each sub-agent
+      for (const file of subagentFiles) {
+        const subagentId = file.replace('.jsonl', '');
+        const subagentPath = path.join(subagentsDir, file);
+        
+        try {
+          // Stream-based reading for subagent files
+          const fileStream = fs.createReadStream(subagentPath, { encoding: 'utf-8' });
+          const rl = readline.createInterface({
+            input: fileStream,
+            crlfDelay: Infinity
+          });
+          
+          const lines = [];
+          for await (const line of rl) {
+            const trimmedLine = line.trim();
+            if (trimmedLine) {
+              lines.push(trimmedLine);
+            }
+          }
+          
+          if (lines.length === 0) continue;
+          
+          // Parse first event to get metadata (slug, agentId, first message)
+          let agentName = subagentId.replace('agent-', '');
+          let agentDisplayName = agentName.toUpperCase();
+          let agentDescription = `Sub-agent ${subagentId}`;
+          
+          try {
+            const firstEvent = JSON.parse(lines[0]);
+            // Use agentId (unique per sub-agent) instead of slug (same for all)
+            if (firstEvent.agentId) {
+              agentName = firstEvent.agentId;
+              agentDisplayName = `agent-${firstEvent.agentId}`;
+            }
+            if (firstEvent.message?.content) {
+              // Use first message as description (truncate if too long)
+              const content = typeof firstEvent.message.content === 'string' 
+                ? firstEvent.message.content 
+                : JSON.stringify(firstEvent.message.content);
+              agentDescription = content.length > 100 ? content.slice(0, 100) + '...' : content;
+            }
+          } catch (err) {
+            // Fall back to file-based name
+          }
+          
+          const subagentEvents = lines.map((line, index) => {
+            try {
+              const event = JSON.parse(line);
+              event._fileIndex = 1000000 + index; // Offset to avoid collision
+              
+              // Mark as sub-agent event
+              event._subagent = {
+                id: subagentId,
+                name: agentName
+              };
+              
+              return event;
+            } catch (err) {
+              console.error(`Error parsing sub-agent ${subagentId} line ${index + 1}:`, err.message);
+              return null;
+            }
+          }).filter(e => e !== null);
+          
+          if (subagentEvents.length === 0) continue;
+          
+          // Normalize sub-agent events (use same source as parent session)
+          const normalizedSubEvents = subagentEvents.map(event => this._normalizeEvent(event, source));
+          
+          // Get first and last event timestamps
+          const firstEvent = normalizedSubEvents[0];
+          const lastEvent = normalizedSubEvents[normalizedSubEvents.length - 1];
+          
+          const startTime = firstEvent.timestamp || new Date().toISOString();
+          const endTime = lastEvent.timestamp || new Date().toISOString();
+          
+          // Generate subagent.started event
+          const startEvent = {
+            type: 'subagent.started',
+            id: `${subagentId}-start`,
+            timestamp: startTime,
+            _fileIndex: firstEvent._fileIndex - 1,
+            _subagent: { id: subagentId, name: agentName },
+            data: {
+              toolCallId: subagentId,
+              agentName: agentName,
+              agentDisplayName: agentDisplayName,
+              agentDescription: agentDescription
+            }
+          };
+          
+          // Generate subagent.completed event
+          const endEvent = {
+            type: 'subagent.completed',
+            id: `${subagentId}-end`,
+            timestamp: endTime,
+            _fileIndex: lastEvent._fileIndex + 1,
+            _subagent: { id: subagentId, name: agentName },
+            data: {
+              toolCallId: subagentId,
+              result: `Sub-agent ${agentDisplayName} completed`
+            }
+          };
+          
+          // Add to main events array
+          events.push(startEvent, ...normalizedSubEvents, endEvent);
+          
+        } catch (err) {
+          console.error(`Error reading sub-agent ${subagentId}:`, err);
+        }
+      }
+      
+      // Re-sort all events by timestamp
       events.sort((a, b) => {
         const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
         const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
         if (timeA !== timeB) return timeA - timeB;
         return a._fileIndex - b._fileIndex;
       });
-
-      return events;
+      
     } catch (err) {
-      console.error('Error reading events:', err);
-      return [];
+      console.error('Error processing sub-agents:', err);
     }
+  }
+
+  /**
+   * Match tool_result events with tool_use for Claude format
+   * @private
+   */
+  _matchClaudeToolResults(events) {
+    // Build map of tool_result by tool_use_id
+    const toolResultMap = new Map();
+    
+    events.forEach(event => {
+      if (event.data?.tools) {
+        event.data.tools.forEach(tool => {
+          if (tool.type === 'tool_result') {
+            // Bug fix #1: Validate tool_use_id exists
+            if (tool.tool_use_id) {
+              toolResultMap.set(tool.tool_use_id, tool);
+            } else {
+              console.warn('[sessionService] tool_result missing tool_use_id:', tool);
+            }
+          }
+        });
+      }
+    });
+    
+    // Match tool_use with tool_result
+    events.forEach(event => {
+      if (event.data?.tools) {
+        event.data.tools = event.data.tools.map(tool => {
+          if (tool.type === 'tool_use') {
+            const result = toolResultMap.get(tool.id);
+            if (result) {
+              return {
+                ...tool,
+                result: result.content,
+                _matched: true
+              };
+            }
+            // Bug fix #4: Add _matched: false for unmatched Claude tools (consistency with Copilot)
+            return {
+              ...tool,
+              _matched: false
+            };
+          }
+          return tool;
+        });
+        
+        // Bug fix: Only remove tool_result from assistant messages
+        // User messages naturally contain tool_result (responses to tool_use), keep them
+        if (event.type === 'assistant' || event.type === 'assistant.message') {
+          event.data.tools = event.data.tools.filter(tool => tool.type !== 'tool_result');
+        }
+      }
+    });
+  }
+
+  /**
+   * Match Pi-Mono tool results with tool calls by order (parentId chain)
+   * Pi-Mono format: toolResult messages form a parentId chain starting from assistant message
+   * After matching, removes tool.result events from the stream (they're attached to tools)
+   * @private
+   */
+  _matchPiMonoToolResults(events) {
+    const matchedResultIds = new Set(); // Track matched tool.result event IDs to remove
+
+    // Find all assistant messages with tool calls
+    events.forEach(assistantEvent => {
+      if (assistantEvent.type === 'assistant.message' && assistantEvent.data.tools && assistantEvent.data.tools.length > 0) {
+        const tools = assistantEvent.data.tools;
+        
+        // Collect toolResult events by following parentId chain
+        const resultEvents = [];
+        let currentId = assistantEvent.id;
+        
+        // Follow the chain: find events whose parentId points to current
+        let foundMore = true;
+        while (foundMore && resultEvents.length < tools.length) {
+          foundMore = false;
+          for (const event of events) {
+            if (event.type === 'tool.result' && event.parentId === currentId && !resultEvents.includes(event)) {
+              resultEvents.push(event);
+              currentId = event.id;
+              foundMore = true;
+              break;
+            }
+          }
+        }
+
+        // Match results to tools by order
+        resultEvents.forEach((resultEvent, index) => {
+          if (index < tools.length) {
+            const tool = tools[index];
+            tool.status = 'completed';
+            tool._matched = true;
+            tool.result = resultEvent.data.result;
+            tool.resultId = resultEvent.id;
+            matchedResultIds.add(resultEvent.id); // Mark for removal
+          }
+        });
+      }
+    });
+
+    // Remove matched tool.result events from the stream (like Claude does)
+    // These are now attached to assistant messages, don't need separate display
+    const originalLength = events.length;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === 'tool.result' && matchedResultIds.has(events[i].id)) {
+        events.splice(i, 1);
+      }
+    }
+    
+    if (matchedResultIds.size > 0) {
+      console.log(`[PI-MONO] Removed ${matchedResultIds.size} matched tool.result events (${originalLength} → ${events.length} events)`);
+    }
+  }
+
+  /**
+   * Match Copilot tool.execution_start/complete events and attach to assistant.message
+   * @private
+   */
+  _matchCopilotToolCalls(events) {
+    // Step 1: Build tool execution map (start + complete paired by toolCallId)
+    const toolExecutions = new Map();
+    
+    events.forEach(event => {
+      if (event.type === 'tool.execution_start') {
+        const toolId = event.data?.toolCallId;
+        if (toolId) {
+          toolExecutions.set(toolId, {
+            name: event.data.toolName,
+            input: event.data.arguments || {},
+            start: event
+          });
+        }
+      } else if (event.type === 'tool.execution_complete') {
+        const toolId = event.data?.toolCallId;
+        if (toolId) {
+          if (toolExecutions.has(toolId)) {
+            const exec = toolExecutions.get(toolId);
+            exec.complete = event;
+            exec.result = event.data?.result;
+            exec.status = event.data?.error ? 'error' : 'success';
+            exec.error = event.data?.error;
+          } else {
+            // Bug fix #3: Handle orphaned execution_complete events (no matching start)
+            console.warn(`[sessionService] Orphaned tool.execution_complete for toolCallId=${toolId}`);
+            toolExecutions.set(toolId, {
+              name: event.data.toolName || 'unknown',
+              input: {},
+              start: null, // No start event
+              complete: event,
+              result: event.data?.result,
+              status: event.data?.error ? 'error' : 'success',
+              error: event.data?.error
+            });
+          }
+        }
+      }
+    });
+    
+    // Step 2: Match toolRequests in assistant.message with tool executions
+    events.forEach(event => {
+      if (event.type === 'assistant.message' && event.data?.toolRequests) {
+        const tools = [];
+        
+        event.data.toolRequests.forEach(req => {
+          const toolId = req.toolCallId;
+          if (toolExecutions.has(toolId)) {
+            const exec = toolExecutions.get(toolId);
+            tools.push({
+              type: 'tool_use',
+              id: toolId,
+              name: req.name || exec.name,
+              input: req.arguments || exec.input,
+              result: exec.result,
+              status: exec.status || 'running',
+              error: exec.error,
+              _matched: !!exec.complete
+            });
+          } else {
+            // Tool request but no execution found (shouldn't happen normally)
+            tools.push({
+              type: 'tool_use',
+              id: toolId,
+              name: req.name,
+              input: req.arguments || {},
+              status: 'running',
+              _matched: false
+            });
+          }
+        });
+        
+        if (tools.length > 0) {
+          event.data.tools = tools;
+        }
+      }
+    });
+  }
+
+  /**
+   * Normalize event to unified format for frontend
+   * @private
+   */
+  _normalizeEvent(event, source) {
+    const normalized = { ...event };
+    normalized.data = normalized.data || {};
+
+    if (source === 'copilot') {
+      // Copilot format normalization
+      
+      // Old format: request/response → user/assistant
+      if (event.type === 'request') {
+        normalized.type = 'user';
+        // Extract message from payload.messages (Anthropic API format)
+        if (event.payload?.messages && Array.isArray(event.payload.messages)) {
+          const userMessage = event.payload.messages.find(m => m.role === 'user');
+          if (userMessage) {
+            normalized.message = {
+              role: 'user',
+              content: userMessage.content || ''
+            };
+          }
+        }
+      } else if (event.type === 'response') {
+        normalized.type = 'assistant';
+        // Extract message from payload.content (Anthropic API format)
+        if (event.payload?.content && Array.isArray(event.payload.content)) {
+          const textBlocks = event.payload.content.filter(block => block.type === 'text');
+          if (textBlocks.length > 0) {
+            normalized.message = {
+              role: 'assistant',
+              content: textBlocks.map(block => block.text).join('\n')
+            };
+          }
+        }
+      }
+      
+      // New format: assistant.message data normalization
+      if (event.type === 'assistant.message') {
+        // Convert data.content → data.message for consistency
+        if (event.data?.content && event.data.content.trim()) {
+          normalized.data.message = event.data.content;
+        }
+        // If only toolcalls, leave message empty (don't create placeholder)
+      }
+      return normalized;
+    }
+
+    if (source === 'pi-mono') {
+      // Pi-Mono format normalization
+      if (event.type === 'message') {
+        const { message } = event;
+        
+        if (message.role === 'user') {
+          normalized.type = 'user.message';
+          // Extract text content
+          if (Array.isArray(message.content)) {
+            const textBlocks = message.content.filter(block => block.type === 'text');
+            if (textBlocks.length > 0) {
+              normalized.data.message = textBlocks.map(block => block.text).join('\n');
+            }
+          }
+        } else if (message.role === 'assistant') {
+          normalized.type = 'assistant.message';
+          // Extract text content
+          if (Array.isArray(message.content)) {
+            const textBlocks = message.content.filter(block => block.type === 'text');
+            if (textBlocks.length > 0) {
+              normalized.data.message = textBlocks.map(block => block.text).join('\n');
+            }
+            
+            // Extract tool calls
+            const toolCalls = message.content.filter(block => block.type === 'toolCall');
+            if (toolCalls.length > 0) {
+              normalized.data.tools = toolCalls.map(tool => ({
+                type: 'tool_use',
+                id: tool.id,
+                name: tool.name,
+                input: tool.arguments,
+                status: 'running', // Will be updated during matching
+                _matched: false,
+                _piMonoToolCallIndex: toolCalls.indexOf(tool) // Track order for matching
+              }));
+            }
+          }
+        } else if (message.role === 'toolResult') {
+          // Pi-Mono tool result - convert to tool.result format
+          normalized.type = 'tool.result';
+          // Extract text content (tool output)
+          if (Array.isArray(message.content)) {
+            const textBlocks = message.content.filter(block => block.type === 'text');
+            if (textBlocks.length > 0) {
+              normalized.data.result = textBlocks.map(block => block.text).join('\n');
+            }
+          }
+          // Mark for ordering-based matching (will be matched by position in post-processing)
+          normalized.data._needsMatching = true;
+        }
+        
+        // Preserve usage metadata if available
+        if (message.usage) {
+          normalized.usage = message.usage;
+        }
+      } else if (event.type === 'model_change') {
+        // Normalize to model.change format
+        normalized.type = 'model.change';
+        normalized.data = {
+          provider: event.provider,
+          model: event.modelId
+        };
+      } else if (event.type === 'thinking_level_change') {
+        // Normalize to thinking.change format
+        normalized.type = 'thinking.change';
+        normalized.data = {
+          level: event.thinkingLevel
+        };
+      } else if (event.type === 'session') {
+        // Session metadata - keep as-is for now
+        normalized.data = {
+          cwd: event.cwd,
+          version: event.version
+        };
+      }
+      
+      return normalized;
+    }
+
+    // Claude format normalization
+    // Handle different event types
+    switch (event.type) {
+      case 'user':
+      case 'assistant':
+        // Convert Claude user/assistant messages to standard format
+        if (event.message) {
+          // Extract text content from message.content
+          if (event.message.content) {
+            const textContent = this._extractClaudeTextContent(event.message.content);
+            if (textContent) {
+              normalized.data.message = textContent;
+            }
+          }
+
+          // Extract tool calls from message.content
+          if (Array.isArray(event.message.content)) {
+            // Gap #6 fix: Add null safety check for block objects
+            const toolBlocks = event.message.content.filter(block => 
+              block && typeof block === 'object' && 
+              (block.type === 'tool_use' || block.type === 'tool_result')
+            );
+            
+            if (toolBlocks.length > 0) {
+              normalized.data.tools = toolBlocks.map(block => {
+                if (block.type === 'tool_use') {
+                  return {
+                    type: 'tool_use',
+                    id: block.id,
+                    name: block.name,
+                    input: block.input
+                  };
+                } else {
+                  return {
+                    type: 'tool_result',
+                    tool_use_id: block.tool_use_id,
+                    content: block.content
+                  };
+                }
+              });
+            }
+          }
+
+          // Preserve original message for reference
+          normalized._originalMessage = event.message;
+        }
+        break;
+
+      case 'file-history-snapshot':
+        // Extract file list from snapshot
+        if (event.snapshot?.trackedFileBackups) {
+          const files = Object.entries(event.snapshot.trackedFileBackups);
+          if (files.length > 0) {
+            const fileList = files.map(([filename, backup]) => 
+              `${filename} (v${backup.version})`
+            ).join('\n');
+            normalized.data.message = `Tracked files:\n${fileList}`;
+          } else {
+            normalized.data.message = 'No files tracked';
+          }
+        }
+        break;
+
+      case 'progress':
+        // Extract progress information
+        if (event.data) {
+          const parts = [];
+          if (event.data.hookName) parts.push(`Hook: ${event.data.hookName}`);
+          if (event.data.hookEvent) parts.push(`Event: ${event.data.hookEvent}`);
+          if (event.data.command) parts.push(`Command: ${event.data.command}`);
+          if (parts.length > 0) {
+            normalized.data.message = parts.join('\n');
+          }
+          
+          // Extract nested tool_use from progress events (subagent messages)
+          // Progress events from subagents contain message.message.content with tool_use blocks
+          if (event.data.message?.message?.content && Array.isArray(event.data.message.message.content)) {
+            const toolBlocks = event.data.message.message.content.filter(block =>
+              block && typeof block === 'object' && (block.type === 'tool_use' || block.type === 'tool_result')
+            );
+            
+            if (toolBlocks.length > 0) {
+              normalized.data.tools = toolBlocks.map(block => {
+                if (block.type === 'tool_use') {
+                  return {
+                    type: 'tool_use',
+                    id: block.id,
+                    name: block.name,
+                    input: block.input
+                  };
+                } else {
+                  return {
+                    type: 'tool_result',
+                    tool_use_id: block.tool_use_id,
+                    content: block.content
+                  };
+                }
+              });
+            }
+          }
+        }
+        break;
+
+      // Add more event types as needed
+      default:
+        // For unknown types, try to extract any reasonable text
+        if (event.data?.message && !normalized.data.message) {
+          normalized.data.message = event.data.message;
+        }
+    }
+
+    return normalized;
+  }
+
+  /**
+   * Extract text content from Claude message.content
+   * @private
+   */
+  _extractClaudeTextContent(content) {
+    if (typeof content === 'string') {
+      return content;
+    }
+    
+    if (Array.isArray(content)) {
+      const textParts = [];
+      
+      for (const block of content) {
+        if (block.type === 'text') {
+          // Direct text block
+          textParts.push(block.text);
+        } else if (block.type === 'tool_result') {
+          // Extract text from tool_result content
+          if (typeof block.content === 'string') {
+            // Format 2: direct string
+            textParts.push(block.content);
+          } else if (Array.isArray(block.content)) {
+            // Format 1: nested array with text blocks
+            const nestedText = block.content
+              .filter(item => item.type === 'text')
+              .map(item => item.text)
+              .join('\n');
+            if (nestedText) {
+              textParts.push(nestedText);
+            }
+          }
+        }
+      }
+      
+      return textParts.join('\n');
+    }
+    
+    return '';
   }
 
   async getSessionWithEvents(sessionId) {
@@ -136,6 +956,530 @@ class SessionService {
     }
 
     return { session, events, metadata };
+  }
+
+  /**
+   * Get unified timeline structure (source-agnostic)
+   * Converts raw events into standardized turns/tools/subagents structure
+   * @param {string} sessionId
+   * @returns {Promise<Object>} Unified timeline data
+   */
+  async getTimeline(sessionId) {
+    const session = await this.getSessionById(sessionId);
+    if (!session) {
+      return null;
+    }
+
+    const events = await this.getSessionEvents(sessionId);
+
+    // Dispatch to source-specific builder
+    if (session.source === 'copilot') {
+      return this._buildCopilotTimeline(events, session);
+    } else if (session.source === 'claude') {
+      return this._buildClaudeTimeline(events, session);
+    } else if (session.source === 'pi-mono') {
+      return this._buildPiMonoTimeline(events, session);
+    }
+
+    return { turns: [], summary: {} };
+  }
+
+  /**
+   * Build Pi-Mono timeline from normalized events
+   * Pi-Mono uses user.message/assistant.message with embedded tools
+   * @private
+   */
+  _buildPiMonoTimeline(events, _session) {
+    const turns = [];
+    let turnId = 0;
+
+    // Find consecutive user -> assistant pairs
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+      
+      if (event.type === 'user.message') {
+        turnId++;
+        const turn = {
+          id: `turn-${turnId}`,
+          type: 'user-request',
+          message: event.data.message || '',
+          startTime: event.timestamp,
+          endTime: event.timestamp,
+          assistantTurns: [],  // Group assistant messages
+          subagents: []
+        };
+
+        // Find all assistant responses until next user message
+        let j = i + 1;
+        let assistantId = 0;
+        while (j < events.length && events[j].type !== 'user.message') {
+          const nextEvent = events[j];
+          
+          if (nextEvent.type === 'assistant.message') {
+            assistantId++;
+            turn.endTime = nextEvent.timestamp;
+            
+            // Create assistant turn with its tools
+            const assistantTurn = {
+              id: `assistant-${assistantId}`,
+              startTime: nextEvent.timestamp,
+              endTime: nextEvent.timestamp,
+              tools: []
+            };
+
+            // Extract tools from this assistant message
+            if (nextEvent.data.tools && Array.isArray(nextEvent.data.tools)) {
+              for (const tool of nextEvent.data.tools) {
+                assistantTurn.tools.push({
+                  name: tool.name,
+                  startTime: nextEvent.timestamp,
+                  endTime: nextEvent.timestamp, // Pi-Mono doesn't have separate end time
+                  status: tool.status || 'completed',
+                  input: tool.input,
+                  result: tool.result
+                });
+              }
+            }
+
+            turn.assistantTurns.push(assistantTurn);
+          }
+          
+          j++;
+        }
+
+        turns.push(turn);
+      }
+    }
+
+    // Calculate summary statistics
+    const totalTools = turns.reduce((sum, t) => 
+      sum + t.assistantTurns.reduce((aSum, at) => aSum + at.tools.length, 0), 0
+    );
+
+    const summary = {
+      totalTurns: turns.length,
+      totalAssistantTurns: turns.reduce((sum, t) => sum + t.assistantTurns.length, 0),
+      totalTools,
+      totalSubagents: 0,
+      startTime: events[0]?.timestamp,
+      endTime: events[events.length - 1]?.timestamp
+    };
+
+    return { turns, summary };
+  }
+
+  /**
+   * Build Copilot timeline from normalized events
+   * Copilot has explicit turn_start/complete and tool.execution_start/complete
+   * @private
+   */
+  _buildCopilotTimeline(events, _session) {
+    const turns = [];
+    let currentTurn = null;
+    let turnId = 0;
+
+    for (const event of events) {
+      if (event.type === 'assistant.turn_start') {
+        turnId++;
+        currentTurn = {
+          id: `turn-${turnId}`,
+          type: 'assistant-turn',
+          message: event.data.message || '',
+          startTime: event.timestamp,
+          endTime: null,
+          tools: [],
+          subagents: []
+        };
+      } else if (event.type === 'assistant.turn_complete' && currentTurn) {
+        currentTurn.endTime = event.timestamp;
+        turns.push(currentTurn);
+        currentTurn = null;
+      } else if (event.type === 'tool.execution_start' && currentTurn) {
+        const tool = {
+          name: event.data.tool || event.data.name,
+          startTime: event.timestamp,
+          endTime: null,
+          status: 'running',
+          input: event.data.arguments || event.data.input
+        };
+        currentTurn.tools.push(tool);
+      } else if (event.type === 'tool.execution_complete' && currentTurn) {
+        // Find matching tool by name and update
+        const tool = currentTurn.tools.find(t => 
+          t.name === (event.data.tool || event.data.name) && !t.endTime
+        );
+        if (tool) {
+          tool.endTime = event.timestamp;
+          tool.status = event.data.error || event.data.isError ? 'error' : 'completed';
+          tool.result = event.data.result || event.data.output;
+        }
+      }
+    }
+
+    // Close any open turn
+    if (currentTurn) {
+      currentTurn.endTime = events[events.length - 1]?.timestamp;
+      turns.push(currentTurn);
+    }
+
+    const summary = {
+      totalTurns: turns.length,
+      totalTools: turns.reduce((sum, t) => sum + t.tools.length, 0),
+      totalSubagents: 0,
+      startTime: events[0]?.timestamp,
+      endTime: events[events.length - 1]?.timestamp
+    };
+
+    return { turns, summary };
+  }
+
+  /**
+   * Build Claude timeline from normalized events
+   * Claude has tool_use/tool_result embedded in messages
+   * @private
+   */
+  _buildClaudeTimeline(events, session) {
+    // Similar to Pi-Mono but may have different patterns
+    // For now, delegate to Pi-Mono logic (can refine later)
+    return this._buildPiMonoTimeline(events, session);
+  }
+
+  /**
+   * Expand Pi-Mono format (assistant.message with embedded tools) to Copilot-compatible event stream
+   * This allows time-analyze.ejs to work with Pi-Mono sessions without modification
+   * @private
+   * @param {Array} events - Normalized Pi-Mono events
+   * @returns {Array} Expanded events in Copilot format
+   */
+  _expandPiMonoToCopilotFormat(events) {
+    const expanded = [];
+    let turnCounter = 0;
+    let toolCallCounter = 0;
+
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+
+      // Keep non-message events as-is
+      if (event.type !== 'user.message' && event.type !== 'assistant.message') {
+        expanded.push(event);
+        continue;
+      }
+
+      // Track user messages for turn grouping
+      if (event.type === 'user.message') {
+        turnCounter++;
+        expanded.push({
+          ...event,
+          _turnNumber: turnCounter
+        });
+        continue;
+      }
+
+      // Expand assistant.message to turn_start + tool events + turn_complete
+      if (event.type === 'assistant.message') {
+        const tools = event.data.tools || [];
+        const turnStartTime = event.timestamp;
+        const turnId = `pi-turn-${i}`;
+
+        // Insert assistant.turn_start
+        expanded.push({
+          type: 'assistant.turn_start',
+          id: `${turnId}-start`,
+          timestamp: turnStartTime,
+          parentId: event.parentId,
+          data: {
+            message: event.data.message || '',
+            model: event.data.model
+          },
+          _synthetic: true,
+          _turnNumber: turnCounter,
+          _fileIndex: event._fileIndex
+        });
+
+        // Insert tool.execution_start and tool.execution_complete for each tool
+        tools.forEach((tool, idx) => {
+          const toolCallId = `pi-tool-${toolCallCounter++}`;
+          const toolStartTime = turnStartTime; // Pi-Mono doesn't have separate timestamps
+          const toolEndTime = turnStartTime; // Same timestamp
+
+          expanded.push({
+            type: 'tool.execution_start',
+            id: `${toolCallId}-start`,
+            timestamp: toolStartTime,
+            parentId: turnId,
+            data: {
+              toolCallId,
+              toolName: tool.name,
+              tool: tool.name, // Alias for compatibility
+              arguments: tool.input || {}
+            },
+            _synthetic: true,
+            _fileIndex: event._fileIndex + 0.1 + (idx * 0.01)
+          });
+
+          expanded.push({
+            type: 'tool.execution_complete',
+            id: `${toolCallId}-complete`,
+            timestamp: toolEndTime,
+            parentId: toolCallId,
+            data: {
+              toolCallId,
+              toolName: tool.name,
+              tool: tool.name, // Alias
+              result: tool.result,
+              error: tool.status === 'error' ? 'Tool execution failed' : null,
+              isError: tool.status === 'error'
+            },
+            _synthetic: true,
+            _fileIndex: event._fileIndex + 0.15 + (idx * 0.01)
+          });
+        });
+
+        // Insert assistant.turn_complete
+        expanded.push({
+          type: 'assistant.turn_complete',
+          id: `${turnId}-complete`,
+          timestamp: event.timestamp,
+          parentId: turnId,
+          data: {
+            message: event.data.message || ''
+          },
+          _synthetic: true,
+          _turnNumber: turnCounter,
+          _fileIndex: event._fileIndex + 0.9
+        });
+      }
+    }
+
+    return expanded;
+  }
+
+  /**
+   * Expand Copilot format (user/assistant) to timeline format with turn_start/complete
+   * @private
+   * @param {Array} events - Normalized Copilot events
+   * @returns {Array} Expanded events with turn_start/complete
+   */
+  _expandCopilotToTimelineFormat(events) {
+    const expanded = [];
+    let turnCounter = 0;
+
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+
+      // Convert user → user.message
+      if (event.type === 'user') {
+        turnCounter++;
+        expanded.push({
+          ...event,
+          type: 'user.message',
+          _turnNumber: turnCounter,
+          data: {
+            ...event.data,
+            message: event.message?.content || event.data?.message || ''
+          }
+        });
+        continue;
+      }
+
+      // Convert assistant → turn_start + (optional tools) + turn_complete
+      if (event.type === 'assistant') {
+        const assistantId = event.uuid || `copilot-assistant-${i}`;
+        const timestamp = event.timestamp;
+
+        // Extract message content
+        let messageText = '';
+        if (event.message?.content) {
+          if (Array.isArray(event.message.content)) {
+            // Claude-style content array
+            messageText = event.message.content
+              .filter(block => block && block.type === 'text')
+              .map(block => block.text)
+              .join('\n');
+          } else if (typeof event.message.content === 'string') {
+            // Simple string content
+            messageText = event.message.content;
+          }
+        } else if (event.data?.message) {
+          messageText = event.data.message;
+        }
+
+        // Insert assistant.turn_start
+        expanded.push({
+          type: 'assistant.turn_start',
+          id: `${assistantId}-start`,
+          timestamp,
+          parentId: event.parentId,
+          uuid: event.uuid,
+          data: {
+            message: messageText,
+            turnId: assistantId
+          },
+          _synthetic: true,
+          _turnNumber: turnCounter,
+          _fileIndex: event._fileIndex
+        });
+
+        // Insert tool events if they exist (already matched by _matchCopilotToolCalls)
+        // Tools are attached to assistant event as data.tools array
+        if (event.data?.tools && event.data.tools.length > 0) {
+          event.data.tools.forEach((tool, idx) => {
+            const _toolCallId = tool.toolId || `tool-${i}-${idx}`;
+            
+            // tool.execution_start
+            if (tool.start) {
+              expanded.push({
+                ...tool.start,
+                _fileIndex: event._fileIndex + 0.1 + (idx * 0.02)
+              });
+            }
+            
+            // tool.execution_complete
+            if (tool.complete) {
+              expanded.push({
+                ...tool.complete,
+                _fileIndex: event._fileIndex + 0.15 + (idx * 0.02)
+              });
+            }
+          });
+        }
+
+        // Insert assistant.turn_complete
+        expanded.push({
+          type: 'assistant.turn_complete',
+          id: `${assistantId}-complete`,
+          timestamp,
+          parentId: assistantId,
+          uuid: event.uuid,
+          data: {
+            message: messageText
+          },
+          _synthetic: true,
+          _turnNumber: turnCounter,
+          _fileIndex: event._fileIndex + 0.9
+        });
+
+        continue;
+      }
+
+      // Keep other events as-is
+      expanded.push(event);
+    }
+
+    return expanded;
+  }
+
+  /**
+   * Expand Claude format (user/assistant) to timeline format with turn_start/complete
+   * @private
+   * @param {Array} events - Normalized Claude events
+   * @returns {Array} Expanded events with turn_start/complete
+   */
+  _expandClaudeToTimelineFormat(events) {
+    const expanded = [];
+    let turnCounter = 0;
+
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+
+      // Convert user → user.message
+      if (event.type === 'user') {
+        turnCounter++;
+        expanded.push({
+          ...event,
+          type: 'user.message',
+          _turnNumber: turnCounter,
+          data: {
+            ...event.data,
+            message: event.data?.message || ''
+          }
+        });
+        continue;
+      }
+
+      // Convert assistant → turn_start + (optional tools) + turn_complete
+      if (event.type === 'assistant') {
+        const assistantId = event.id || `claude-assistant-${i}`;
+        const timestamp = event.timestamp;
+
+        // Extract message content (already normalized in _normalizeEvent)
+        const messageText = event.data?.message || '';
+
+        // Insert assistant.turn_start
+        expanded.push({
+          type: 'assistant.turn_start',
+          id: `${assistantId}-start`,
+          timestamp,
+          parentId: event.parentId,
+          data: {
+            message: messageText,
+            turnId: assistantId
+          },
+          _synthetic: true,
+          _turnNumber: turnCounter,
+          _fileIndex: event._fileIndex
+        });
+
+        // Insert tool events if they exist (already matched by _matchClaudeToolResults)
+        if (event.data?.tools && event.data.tools.length > 0) {
+          event.data.tools.forEach((tool, idx) => {
+            if (tool.type === 'tool_use') {
+              // Tool call
+              expanded.push({
+                type: 'tool.execution_start',
+                id: `${tool.id}-start`,
+                timestamp,
+                data: {
+                  toolCallId: tool.id,
+                  toolName: tool.name,
+                  arguments: tool.input || {}
+                },
+                _synthetic: true,
+                _fileIndex: event._fileIndex + 0.1 + (idx * 0.02)
+              });
+
+              // Tool result (if matched)
+              if (tool.result) {
+                expanded.push({
+                  type: 'tool.execution_complete',
+                  id: `${tool.id}-complete`,
+                  timestamp,
+                  data: {
+                    toolCallId: tool.id,
+                    toolName: tool.name,
+                    result: tool.result,
+                    isError: false
+                  },
+                  _synthetic: true,
+                  _fileIndex: event._fileIndex + 0.15 + (idx * 0.02)
+                });
+              }
+            }
+          });
+        }
+
+        // Insert assistant.turn_complete
+        expanded.push({
+          type: 'assistant.turn_complete',
+          id: `${assistantId}-complete`,
+          timestamp,
+          parentId: assistantId,
+          data: {
+            message: messageText
+          },
+          _synthetic: true,
+          _turnNumber: turnCounter,
+          _fileIndex: event._fileIndex + 0.9
+        });
+
+        continue;
+      }
+
+      // Keep other events as-is
+      expanded.push(event);
+    }
+
+    return expanded;
   }
 }
 

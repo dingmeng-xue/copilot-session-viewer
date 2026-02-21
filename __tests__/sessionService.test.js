@@ -22,8 +22,16 @@ describe('SessionService', () => {
     async function writeEventsFile(events) {
       const sessionDir = path.join(tmpDir, sessionId);
       await fs.promises.mkdir(sessionDir, { recursive: true });
+      
+      // Create events.jsonl
       const content = events.map(e => JSON.stringify(e)).join('\n');
       await fs.promises.writeFile(path.join(sessionDir, 'events.jsonl'), content);
+      
+      // Create workspace.yaml (required by SessionRepository)
+      await fs.promises.writeFile(
+        path.join(sessionDir, 'workspace.yaml'),
+        'repo: test-repo\nsummary: Test Session\n'
+      );
     }
 
     it('should sort events by timestamp in ascending order', async () => {
@@ -98,6 +106,12 @@ describe('SessionService', () => {
         '{"type":"event.b","timestamp":"2026-02-16T17:03:00.000Z"}',
       ].join('\n');
       await fs.promises.writeFile(path.join(sessionDir, 'events.jsonl'), content);
+      
+      // Create workspace.yaml (required by SessionRepository)
+      await fs.promises.writeFile(
+        path.join(sessionDir, 'workspace.yaml'),
+        'repo: test-repo\nsummary: Test Session\n'
+      );
 
       const events = await service.getSessionEvents(sessionId);
 
@@ -131,6 +145,112 @@ describe('SessionService', () => {
         expect(events[i].data.tool).toBe(`tool_${i}`);
         expect(events[i]._fileIndex).toBe(i);
       }
+    });
+  });
+
+  describe('getSessionEvents - streaming and Claude format', () => {
+    const sessionId = 'test-claude-session';
+
+    it('should handle Claude format events', async () => {
+      const sessionDir = path.join(tmpDir, sessionId);
+      await fs.promises.mkdir(sessionDir, { recursive: true });
+      
+      const claudeEvents = [
+        { type: 'user', uuid: 'user-1', timestamp: '2026-02-20T10:00:00.000Z', message: { role: 'user', content: [{ type: 'text', text: 'Hello' }] } },
+        { type: 'assistant', uuid: 'asst-1', parentUuid: 'user-1', timestamp: '2026-02-20T10:00:01.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Hi' }] } }
+      ];
+      
+      const content = claudeEvents.map(e => JSON.stringify(e)).join('\n');
+      await fs.promises.writeFile(path.join(sessionDir, 'events.jsonl'), content);
+      await fs.promises.writeFile(path.join(sessionDir, 'workspace.yaml'), 'repo: test\n');
+      
+      const events = await service.getSessionEvents(sessionId);
+      
+      expect(events).toHaveLength(2);
+      expect(events[0].type).toBe('user');
+      expect(events[1].type).toBe('assistant');
+    });
+
+    it('should handle large files with streaming', async () => {
+      const sessionDir = path.join(tmpDir, sessionId);
+      await fs.promises.mkdir(sessionDir, { recursive: true });
+      
+      // Generate 1000 events with unique timestamps
+      const largeEvents = [];
+      for (let i = 0; i < 1000; i++) {
+        const minute = Math.floor(i / 60);
+        const second = i % 60;
+        largeEvents.push({
+          type: 'tool.execution_start',
+          timestamp: `2026-02-20T10:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}.000Z`,
+          data: { tool: `tool_${i}`, toolCallId: `id_${i}` }
+        });
+      }
+      
+      const content = largeEvents.map(e => JSON.stringify(e)).join('\n');
+      await fs.promises.writeFile(path.join(sessionDir, 'events.jsonl'), content);
+      await fs.promises.writeFile(path.join(sessionDir, 'workspace.yaml'), 'repo: test\n');
+      
+      const events = await service.getSessionEvents(sessionId);
+      
+      expect(events).toHaveLength(1000);
+      expect(events[0].data.tool).toBe('tool_0');
+      expect(events[999].data.tool).toBe('tool_999');
+    });
+
+    it('should preserve _fileIndex during streaming', async () => {
+      const sessionDir = path.join(tmpDir, sessionId);
+      await fs.promises.mkdir(sessionDir, { recursive: true });
+      
+      const events = [
+        { type: 'event.1', timestamp: '2026-02-20T10:00:00.000Z' },
+        { type: 'event.2', timestamp: '2026-02-20T10:00:01.000Z' },
+        { type: 'event.3', timestamp: '2026-02-20T10:00:02.000Z' }
+      ];
+      
+      const content = events.map(e => JSON.stringify(e)).join('\n');
+      await fs.promises.writeFile(path.join(sessionDir, 'events.jsonl'), content);
+      await fs.promises.writeFile(path.join(sessionDir, 'workspace.yaml'), 'repo: test\n');
+      
+      const result = await service.getSessionEvents(sessionId);
+      
+      expect(result[0]._fileIndex).toBe(0);
+      expect(result[1]._fileIndex).toBe(1);
+      expect(result[2]._fileIndex).toBe(2);
+    });
+  });
+
+  describe('getSessionWithEvents', () => {
+    const sessionId = 'complete-session';
+
+    it('should return both metadata and events', async () => {
+      const sessionDir = path.join(tmpDir, sessionId);
+      await fs.promises.mkdir(sessionDir, { recursive: true });
+      
+      await fs.promises.writeFile(
+        path.join(sessionDir, 'workspace.yaml'),
+        'repo: test-repo\nsummary: Test Session\ncreated_at: 2026-02-20T10:00:00Z\n'
+      );
+      
+      const events = [
+        { type: 'session.start', timestamp: '2026-02-20T10:00:00.000Z' },
+        { type: 'user.message', timestamp: '2026-02-20T10:00:01.000Z', data: { text: 'Hello' } }
+      ];
+      
+      const content = events.map(e => JSON.stringify(e)).join('\n');
+      await fs.promises.writeFile(path.join(sessionDir, 'events.jsonl'), content);
+      
+      const result = await service.getSessionWithEvents(sessionId);
+      
+      expect(result).not.toBeNull();
+      expect(result.metadata).toBeDefined();
+      expect(result.metadata.summary).toBe('Test Session');
+      expect(result.events).toHaveLength(2);
+    });
+
+    it('should return null for non-existent session', async () => {
+      const result = await service.getSessionWithEvents('non-existent-id');
+      expect(result).toBeNull();
     });
   });
 });

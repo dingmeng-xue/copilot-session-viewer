@@ -9,7 +9,7 @@ class SessionController {
   // Homepage with initial load (first batch)
   async getHomepage(req, res) {
     try {
-      const initialLimit = 20; // Load first 20 sessions
+      const initialLimit = 100; // Load first 100 sessions to ensure Pi-Mono sessions are included
       const paginationData = await this.sessionService.getPaginatedSessions(1, initialLimit);
 
       // Pass data for infinite scroll
@@ -67,6 +67,7 @@ class SessionController {
       }
 
       const { events, metadata } = sessionData;
+      // Use original time-analyze view (supports all sources via normalized events)
       res.render('time-analyze', { sessionId, events, metadata });
     } catch (err) {
       console.error('Error loading time analysis:', err);
@@ -150,11 +151,73 @@ class SessionController {
         return res.status(400).json({ error: 'Invalid session ID' });
       }
 
+      // Get session metadata for ETag generation
+      const session = await this.sessionService.getSessionById(sessionId);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      // Generate ETag from session ID + timestamp
+      const crypto = require('crypto');
+      const etagBase = `${sessionId}-${session.updated || session.created}`;
+      const etag = crypto.createHash('md5').update(etagBase).digest('hex');
+
+      // Check If-None-Match header (client cache)
+      const clientEtag = req.headers['if-none-match'];
+      if (clientEtag === etag) {
+        return res.status(304).end(); // Not Modified - use cached version
+      }
+
+      // Load events
       const events = await this.sessionService.getSessionEvents(sessionId);
+
+      // Set caching headers
+      res.set({
+        'ETag': etag,
+        'Cache-Control': 'private, max-age=0, no-cache', // Disable cache during development
+        'Vary': 'Accept-Encoding'
+      });
+
       res.json(events);
     } catch (err) {
       console.error('Error loading events:', err);
       res.status(500).json({ error: 'Error loading events' });
+    }
+  }
+
+  // API: Get timeline data (source-agnostic)
+  async getTimeline(req, res) {
+    try {
+      const sessionId = req.params.id;
+
+      // Validate session ID format
+      if (!isValidSessionId(sessionId)) {
+        return res.status(400).json({ error: 'Invalid session ID' });
+      }
+
+      const session = await this.sessionService.getSessionById(sessionId);
+      if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      // Generate unified timeline structure
+      const timeline = await this.sessionService.getTimeline(sessionId);
+
+      // Set caching headers
+      const crypto = require('crypto');
+      const etagBase = `${sessionId}-timeline-${session.updated || session.created}`;
+      const etag = crypto.createHash('md5').update(etagBase).digest('hex');
+
+      res.set({
+        'ETag': etag,
+        'Cache-Control': 'private, max-age=300',
+        'Vary': 'Accept-Encoding'
+      });
+
+      res.json(timeline);
+    } catch (err) {
+      console.error('Error loading timeline:', err);
+      res.status(500).json({ error: 'Error loading timeline' });
     }
   }
 }

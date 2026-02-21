@@ -5,6 +5,7 @@ class Session {
   constructor(id, type, options = {}) {
     this.id = id;
     this.type = type; // 'directory' or 'file'
+    this.source = options.source || 'copilot'; // 'copilot' or 'claude'
     this.workspace = options.workspace || {};
     this.createdAt = options.createdAt;
     this.updatedAt = options.updatedAt;
@@ -88,6 +89,7 @@ class Session {
     return {
       id: this.id,
       type: this.type,
+      source: this.source,
       workspace: this.workspace,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,

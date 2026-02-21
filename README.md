@@ -97,6 +97,69 @@ npx @qiaolei81/copilot-session-viewer
 
 ---
 
+## 🧪 Testing & Coverage
+
+This project includes comprehensive unit and E2E test coverage with detailed reporting.
+
+### Running Tests
+
+```bash
+# Unit tests only
+npm test
+
+# Unit tests with coverage
+npm run test:coverage
+
+# E2E tests only
+npm run test:e2e
+
+# E2E tests with coverage
+npm run test:e2e:coverage
+
+# Run all tests (unit + E2E)
+npm run test:all
+
+# Run all tests with combined coverage report
+npm run test:coverage:all
+```
+
+### Coverage Reports
+
+The `test:coverage:all` command generates comprehensive coverage reports by:
+1. Running Jest unit tests with coverage
+2. Running Playwright E2E tests with coverage (using built-in Coverage API)
+3. Converting V8 coverage format to Istanbul format
+4. Merging unit and E2E coverage data
+5. Generating combined HTML reports
+
+**Coverage Report Locations:**
+- **Combined Coverage**: `./coverage/combined/index.html` - Merged unit + E2E coverage
+- **Unit Test Coverage**: `./coverage/unit/index.html` - Jest unit tests only
+- **LCOV Report**: `./coverage/lcov.info` - For CI/CD integration
+
+**Coverage Collection:**
+- **Unit tests**: Automatically collected by Jest for all server-side code
+- **E2E tests**: Uses Playwright's built-in Coverage API to collect browser JavaScript coverage
+- **Merge tool**: Uses `nyc` to merge Istanbul-formatted coverage data
+- **Conversion**: V8 coverage from Playwright is converted using `v8-to-istanbul`
+
+### Test Structure
+
+```
+__tests__/
+├── unit/                    # Jest unit tests
+│   ├── server.test.js
+│   └── ...
+└── e2e/                     # Playwright E2E tests
+    ├── fixtures.js          # Test fixtures with coverage hooks
+    ├── global-setup.js      # Global test setup
+    ├── helpers/
+    │   └── coverage.js      # Coverage collection helpers
+    └── *.spec.js            # E2E test specs
+```
+
+---
+
 ## 🏗️ Architecture
 
 ```

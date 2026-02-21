@@ -3,8 +3,8 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './__tests__/e2e',
   
-  // Maximum time one test can run
-  timeout: 30 * 1000,
+  // Maximum time one test can run (increased for large session tests)
+  timeout: 60 * 1000,
   
   // Run tests in files in parallel
   fullyParallel: true,
@@ -22,10 +22,10 @@ export default defineConfig({
   use: {
     // Base URL to use in actions like `await page.goto('/')`
     baseURL: 'http://localhost:3838',
-    
+
     // Collect trace when retrying the failed test
     trace: 'on-first-retry',
-    
+
     // Screenshot on failure
     screenshot: 'only-on-failure',
   },

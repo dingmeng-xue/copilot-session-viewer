@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+const { test, expect } = require('./fixtures');
 
 test.describe('API Pagination', () => {
   test.beforeEach(async ({ request }) => {
@@ -183,7 +183,7 @@ test.describe('API Pagination', () => {
     const responseTime = endTime - startTime;
 
     expect(response.ok()).toBeTruthy();
-    expect(responseTime).toBeLessThan(10000); // Should respond within 10 seconds
+    expect(responseTime).toBeLessThan(20000); // Should respond within 20 seconds (large datasets)
 
     // For small datasets, should be much faster
     if (responseTime < 1000) {

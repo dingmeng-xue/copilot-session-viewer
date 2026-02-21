@@ -90,6 +90,7 @@ describe('Session', () => {
       expect(json).toEqual({
         id: 'test-id',
         type: 'directory',
+        source: 'copilot',  // Added source field
         workspace: { repo: 'test' },
         createdAt: undefined,
         updatedAt: undefined,

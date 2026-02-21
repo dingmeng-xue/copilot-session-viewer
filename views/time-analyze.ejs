@@ -764,6 +764,18 @@
         const showMarkerLegend = ref(false);
         const copyLabel = ref('📊 Copy as Mermaid Gantt');
 
+        // Helper: normalize message to string (handle arrays/objects from Copilot)
+        const normalizeMessage = (msg) => {
+          if (!msg) return '';
+          if (typeof msg === 'string') return msg;
+          if (Array.isArray(msg)) {
+            // Handle content array (Copilot format)
+            return msg.map(c => c.text || c.content || '').join(' ');
+          }
+          if (typeof msg === 'object' && msg.text) return msg.text;
+          return String(msg);
+        };
+
         // Gantt crosshair
         const ganttCrosshairX = ref(null); // px from left of gantt-container
         const ganttCrosshairTime = ref('');
@@ -808,6 +820,16 @@
 
           // Sanitize label for Mermaid: strip chars that break syntax or could escape the code block
           const sanitize = (str) => (str || '').replace(/[`\n\r]/g, '').replace(/[:;#]/g, '-').replace(/\s+/g, ' ').trim().substring(0, 100);
+          const normalizeMessage = (msg) => {
+            if (!msg) return '';
+            if (typeof msg === 'string') return msg;
+            if (Array.isArray(msg)) {
+              // Handle content array (Copilot format)
+              return msg.map(c => c.text || c.content || '').join(' ');
+            }
+            if (typeof msg === 'object' && msg.text) return msg.text;
+            return String(msg);
+          };
 
           // Deduplicate task IDs within the mermaid block
           const usedIds = {};
@@ -828,7 +850,7 @@
 
           for (const item of items) {
             if (item.rowType === 'user-req') {
-              const msg = sanitize(item.message || 'No message').substring(0, 40);
+              const msg = sanitize(normalizeMessage(item.message) || 'No message').substring(0, 40);
               const label = 'UserReq ' + item.userReqNumber + ' – ' + msg + ' (' + formatDuration(item.duration) + ')';
               const id = uniqueId('userreq_' + item.userReqNumber);
               const start = toEpochMs(item.startTime);
@@ -925,12 +947,23 @@
         // ── Session timeline ──
         const sessionStart = computed(() => {
           if (!events.value.length) return null;
-          return new Date(events.value[0].timestamp).getTime();
+          // Find first event with valid timestamp
+          for (const ev of events.value) {
+            const ts = ev.timestamp || ev.snapshot?.timestamp;
+            if (ts) return new Date(ts).getTime();
+          }
+          return null;
         });
 
         const sessionEnd = computed(() => {
           if (!events.value.length) return null;
-          return new Date(events.value[events.value.length - 1].timestamp).getTime();
+          // Find last event with valid timestamp
+          for (let i = events.value.length - 1; i >= 0; i--) {
+            const ev = events.value[i];
+            const ts = ev.timestamp || ev.snapshot?.timestamp;
+            if (ts) return new Date(ts).getTime();
+          }
+          return null;
         });
 
         const totalDuration = computed(() => {
@@ -1015,8 +1048,7 @@
             if (ev.type === 'subagent.started') {
               startStack.push(ev);
             } else if (ev.type === 'subagent.completed' || ev.type === 'subagent.failed') {
-              const name = ev.data?.agentDisplayName || ev.data?.agentName || 'SubAgent';
-              // Find matching start by toolCallId, with name-based LIFO fallback
+              // Find matching start by toolCallId
               const tcid = ev.data?.toolCallId;
               let startIdx = -1;
               if (tcid) {
@@ -1027,17 +1059,13 @@
                   }
                 }
               }
-              // Fallback to name-based LIFO if no toolCallId match
-              if (startIdx < 0) {
-                for (let i = startStack.length - 1; i >= 0; i--) {
-                  const sName = startStack[i].data?.agentDisplayName || startStack[i].data?.agentName || 'SubAgent';
-                  if (sName === name) {
-                    startIdx = i;
-                    break;
-                  }
-                }
+              // Fallback to LIFO if no toolCallId match (pop last started)
+              if (startIdx < 0 && startStack.length > 0) {
+                startIdx = startStack.length - 1;
               }
               const startEv = startIdx >= 0 ? startStack.splice(startIdx, 1)[0] : null;
+              // Extract name from matched start event (completed event doesn't have name)
+              const name = startEv?.data?.agentDisplayName || startEv?.data?.agentName || 'SubAgent';
               const startTime = startEv ? new Date(startEv.timestamp).getTime() : null;
               const endTime = new Date(ev.timestamp).getTime();
               const duration = startTime ? endTime - startTime : null;
@@ -1383,48 +1411,64 @@
 
         // ── Turn analysis ──
         const turnAnalysis = computed(() => {
-          const sorted = sortedEvents.value;
-          const turnStarts = sorted.filter(e => e.type === 'assistant.turn_start');
-          const allUserMessages = sorted.filter(e => e.type === 'user.message');
+          try {
+            const sorted = sortedEvents.value;
+            const turnStarts = sorted.filter(e => e.type === 'assistant.turn_start');
+            const allUserMessages = sorted.filter(e => e.type === 'user.message');
 
-          return turnStarts.map((turn, idx) => {
-            const startTime = new Date(turn.timestamp).getTime();
-            const nextTurn = turnStarts[idx + 1];
-            const endTime = nextTurn
-              ? new Date(nextTurn.timestamp).getTime()
-              : sessionEnd.value || startTime;
-            const duration = endTime - startTime;
-
-            // Find user message before this turn
-            const turnIndex = sorted.indexOf(turn);
-            const userMessage = sorted
-              .slice(0, turnIndex)
-              .reverse()
-              .find(e => e.type === 'user.message');
-
-            const userReqNumber = userMessage
-              ? allUserMessages.indexOf(userMessage) + 1
-              : 0;
-
-            // Count tool calls in this turn
-            let toolCalls = 0;
-            for (const e of sorted) {
-              const t = new Date(e.timestamp).getTime();
-              if (t >= startTime && t <= endTime && e.type === 'tool.execution_start') {
-                toolCalls++;
+            return turnStarts.map((turn, idx) => {
+              const ts = turn.timestamp;
+              if (!ts) {
+                console.warn('[turnAnalysis] Turn without timestamp:', turn);
+                return null;
               }
-            }
+              const startTime = new Date(ts).getTime();
+              if (isNaN(startTime)) {
+                console.warn('[turnAnalysis] Invalid timestamp:', ts, turn);
+                return null;
+              }
+              
+              const nextTurn = turnStarts[idx + 1];
+              const endTime = nextTurn
+                ? new Date(nextTurn.timestamp).getTime()
+                : sessionEnd.value || startTime;
+              const duration = endTime - startTime;
 
-            return {
-              turnId: turn.data?.turnId ?? idx,
-              userReqNumber,
-              message: userMessage?.data?.content || userMessage?.data?.transformedContent || '',
-              startTime: turn.timestamp,
-              endTime: nextTurn?.timestamp || events.value[events.value.length - 1]?.timestamp,
-              duration,
-              toolCalls
-            };
-          });
+              // Find user message before this turn
+              const turnIndex = sorted.indexOf(turn);
+              const userMessage = sorted
+                .slice(0, turnIndex)
+                .reverse()
+                .find(e => e.type === 'user.message');
+
+              const userReqNumber = userMessage
+                ? allUserMessages.indexOf(userMessage) + 1
+                : 0;
+
+              // Count tool calls in this turn
+              let toolCalls = 0;
+              for (const e of sorted) {
+                const t = new Date(e.timestamp).getTime();
+                if (t >= startTime && t <= endTime && e.type === 'tool.execution_start') {
+                  toolCalls++;
+                }
+              }
+
+              return {
+                turnId: turn.data?.turnId ?? idx,
+                userReqNumber,
+                message: normalizeMessage(userMessage?.data?.message || userMessage?.data?.content || userMessage?.data?.transformedContent || ''),
+                startTime: turn.timestamp,
+                endTime: nextTurn?.timestamp || events.value[events.value.length - 1]?.timestamp,
+                duration,
+                toolCalls
+              };
+            }).filter(t => t !== null);
+          } catch (err) {
+            console.error('[turnAnalysis] Error:', err);
+            error.value = 'Error analyzing turns: ' + err.message;
+            return [];
+          }
         });
 
         const maxTurnDuration = computed(() => {
@@ -1992,13 +2036,19 @@
             const resp = await fetch('/api/sessions/' + sessionId.value + '/events');
             if (!resp.ok) throw new Error('Failed to load events: ' + resp.statusText);
             const data = await resp.json();
+            console.log('[TIME-ANALYZE] Loaded events:', data.length);
+            console.log('[TIME-ANALYZE] Event types:', [...new Set(data.map(e => e.type))]);
+            console.log('[TIME-ANALYZE] Turn starts:', data.filter(e => e.type === 'assistant.turn_start').length);
+            console.log('[TIME-ANALYZE] User messages:', data.filter(e => e.type === 'user.message').length);
             events.value = data.sort((a, b) => {
               const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
               const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
               if (timeA !== timeB) return timeA - timeB;
               return (a._fileIndex ?? 0) - (b._fileIndex ?? 0);
             });
+            console.log('[TIME-ANALYZE] Events set, length:', events.value.length);
           } catch (err) {
+            console.error('[TIME-ANALYZE] Error loading events:', err);
             error.value = err.message;
           } finally {
             loading.value = false;
@@ -2210,7 +2260,10 @@
 
           <!-- ═══ Unified Timeline Tab ═══ -->
           <div v-if="activeTab === 'timeline'" class="section">
-            <div v-if="!unifiedTimelineItems.length" class="empty-state">
+            <div v-if="error" class="empty-state" style="color: #f85149;">
+              Error loading timeline: {{ error }}
+            </div>
+            <div v-else-if="!unifiedTimelineItems.length" class="empty-state">
               No timeline data found in this session.
             </div>
             <div v-else>
@@ -2628,6 +2681,15 @@
         </div>
       `
     });
+
+    // Global error handler
+    app.config.errorHandler = (err, instance, info) => {
+      console.error('[Vue Error]', err, info);
+      const errorDiv = document.createElement('div');
+      errorDiv.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #f85149; color: white; padding: 20px; border-radius: 6px; z-index: 9999; max-width: 80%; font-family: monospace; font-size: 14px;';
+      errorDiv.innerHTML = `<strong>Vue Error:</strong><br>${err.message}<br><br><small>${info}</small>`;
+      document.body.appendChild(errorDiv);
+    };
 
     app.mount('#app');
   </script>

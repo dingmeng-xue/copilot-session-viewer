@@ -224,6 +224,21 @@
       color: #58a6ff;
       border: 1px solid rgba(31, 111, 235, 0.4);
     }
+    .source-copilot {
+      background: rgba(88, 166, 255, 0.2);
+      color: #58a6ff;
+      border: 1px solid rgba(88, 166, 255, 0.4);
+    }
+    .source-claude {
+      background: rgba(210, 153, 34, 0.2);
+      color: #d29922;
+      border: 1px solid rgba(210, 153, 34, 0.4);
+    }
+    .source-pi-mono {
+      background: rgba(138, 102, 204, 0.2);
+      color: #a78bdb;
+      border: 1px solid rgba(138, 102, 204, 0.4);
+    }
     
     /* Turn buttons */
     .turn-buttons {
@@ -930,6 +945,24 @@
         
         const expandedTools = ref({});
         const expandedContent = ref({});
+        const MAX_EXPANDED_ITEMS = 50; // Memory leak fix: Limit expanded items
+        
+        // Clean up old expansion state to prevent memory leak
+        const cleanupExpansionState = () => {
+          const toolKeys = Object.keys(expandedTools.value);
+          if (toolKeys.length > MAX_EXPANDED_ITEMS) {
+            // Keep only recent 50 expanded items
+            const toRemove = toolKeys.slice(0, toolKeys.length - MAX_EXPANDED_ITEMS);
+            toRemove.forEach(key => delete expandedTools.value[key]);
+          }
+          
+          const contentKeys = Object.keys(expandedContent.value);
+          if (contentKeys.length > MAX_EXPANDED_ITEMS) {
+            const toRemove = contentKeys.slice(0, contentKeys.length - MAX_EXPANDED_ITEMS);
+            toRemove.forEach(key => delete expandedContent.value[key]);
+          }
+        };
+        
         const currentFilter = ref('all');
         const searchText = ref('');
         const debouncedSearchText = ref('');
@@ -944,6 +977,15 @@
           searchTimeout = setTimeout(() => {
             debouncedSearchText.value = newValue;
           }, 300);
+        });
+        
+        // Memory leak fix: Clean up expansion state when filter/search changes
+        watch(currentFilter, () => {
+          cleanupExpansionState();
+        });
+        
+        watch(debouncedSearchText, () => {
+          cleanupExpansionState();
         });
         
         // Async loading state
@@ -1168,43 +1210,6 @@
         };
         
         // Tool call map
-        const toolCallMap = computed(() => {
-          const map = new Map();
-          const toolGroups = new Map();
-          
-          flatEvents.value.forEach(event => {
-            if (event.type === 'tool.execution_start') {
-              const toolId = event.data?.toolCallId;
-              if (toolId) {
-                if (!toolGroups.has(toolId)) {
-                  toolGroups.set(toolId, { tool: event.data.tool, start: event });
-                }
-              }
-            } else if (event.type === 'tool.execution_complete') {
-              const toolId = event.data?.toolCallId;
-              if (toolId && toolGroups.has(toolId)) {
-                toolGroups.get(toolId).complete = event;
-              }
-            }
-          });
-          
-          flatEvents.value.forEach(event => {
-            if (event.type === 'assistant.message') {
-              const groups = [];
-              toolGroups.forEach((group, toolId) => {
-                if (group.start?.parentId === event.id) {
-                  groups.push(group);
-                }
-              });
-              if (groups.length > 0) {
-                map.set(event.id || event.virtualIndex, groups);
-              }
-            }
-          });
-          
-          return map;
-        });
-
         // Subagent ownership: attribute events to their owning subagent
         const subagentOwnership = computed(() => {
           const sorted = flatEvents.value;
@@ -1307,8 +1312,18 @@
           return `${hours}:${minutes}:${seconds}`;
         };
         
+        // Performance fix: Cache markdown rendering results
+        const markdownCache = new Map();
+        const MAX_CACHE_SIZE = 200;
+        
         const renderMarkdown = (text) => {
           if (!text) return '';
+          
+          // Check cache first
+          if (markdownCache.has(text)) {
+            return markdownCache.get(text);
+          }
+          
           try {
             // 处理转义序列：将 \r\n、\n、\t 等转换为实际字符
             let processedText = text
@@ -1343,7 +1358,16 @@
               return tableHTML + marked.parse(content);
             }
             
-            return marked.parse(processedText);
+            const result = marked.parse(processedText);
+            
+            // Cache the result (with size limit to prevent memory leak)
+            if (markdownCache.size >= MAX_CACHE_SIZE) {
+              const firstKey = markdownCache.keys().next().value;
+              markdownCache.delete(firstKey);
+            }
+            markdownCache.set(text, result);
+            
+            return result;
           } catch (e) {
             return text;
           }
@@ -1535,11 +1559,35 @@
         };
         
         const hasTools = (event) => {
-          return event.type === 'assistant.message' && toolCallMap.value.has(event.id || event.virtualIndex);
+          // Unified format: check data.tools (works for both Copilot and Claude)
+          return event.data?.tools && event.data.tools.length > 0;
         };
         
         const getToolGroups = (event) => {
-          return toolCallMap.value.get(event.id || event.virtualIndex) || [];
+          // Unified format from server (both Copilot and Claude normalized to data.tools)
+          if (event.data?.tools && Array.isArray(event.data.tools)) {
+            return event.data.tools.map(tool => {
+              if (tool.type === 'tool_use') {
+                return {
+                  tool: tool.name,
+                  start: {
+                    data: {
+                      toolName: tool.name,
+                      arguments: tool.input
+                    }
+                  },
+                  complete: tool._matched ? {
+                    data: {
+                      result: tool.result
+                    }
+                  } : null
+                };
+              }
+              return null;
+            }).filter(g => g !== null);
+          }
+          
+          return [];
         };
 
         // Subagent color palette for parallel subagent distinction
@@ -1554,6 +1602,17 @@
           '#56d4dd'  // teal
         ];
 
+        // Hash function for generating consistent color indices
+        const hashCode = (str) => {
+          let hash = 0;
+          for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+          }
+          return hash;
+        };
+
         const getSubagentInfo = (event) => {
           const { ownerMap, subagentInfo } = subagentOwnership.value;
           // For subagent dividers, use their own toolCallId
@@ -1565,7 +1624,19 @@
             }
             return null;
           }
-          // For regular events, look up ownership
+          // For regular events, first check _subagent metadata (Claude format)
+          if (event._subagent) {
+            const subagentId = event._subagent.id;
+            const subagentName = event._subagent.name;
+            // Use subagentId as toolCallId for consistency
+            if (subagentInfo.has(subagentId)) {
+              const info = subagentInfo.get(subagentId);
+              return { name: info.name, toolCallId: subagentId, colorIndex: info.colorIndex };
+            }
+            // If not in subagentInfo, create a default entry
+            return { name: subagentName, toolCallId: subagentId, colorIndex: Math.abs(hashCode(subagentId)) };
+          }
+          // For regular events, look up ownership (Copilot format)
           const tcid = ownerMap.get(event.stableId);
           if (!tcid) return null;
           const info = subagentInfo.get(tcid);
@@ -1835,9 +1906,23 @@
           
           // Cleanup on unmount
           onBeforeUnmount(() => {
+            // Clear search timeout (memory leak fix)
+            if (searchTimeout) {
+              clearTimeout(searchTimeout);
+              searchTimeout = null;
+            }
+            
+            // Clean scroll listeners
             if (scrollCleanup) {
               scrollCleanup();
             }
+            
+            // Clear expansion state (memory leak fix)
+            expandedTools.value = {};
+            expandedContent.value = {};
+            
+            // Clear markdown cache (memory leak fix)
+            markdownCache.clear();
           });
         });
         
@@ -1864,7 +1949,6 @@
           turns,
           userReqs,
           truncateText,
-          toolCallMap,
           formatTime,
           formatDateTime,
           renderMarkdown,
@@ -1914,6 +1998,21 @@
                   <div v-if="metadata.summary" class="session-summary-block">{{ metadata.summary }}</div>
                   <table class="session-info-table">
                     <tbody>
+                      <tr v-if="metadata.source">
+                        <td>Source</td>
+                        <td>
+                          <span :class="['source-badge', 
+                            metadata.source === 'claude' ? 'source-claude' : 
+                            metadata.source === 'pi-mono' ? 'source-pi-mono' : 
+                            'source-copilot']">
+                            {{ 
+                              metadata.source === 'claude' ? 'Claude Code' : 
+                              metadata.source === 'pi-mono' ? 'Pi-Mono' : 
+                              'GitHub Copilot' 
+                            }}
+                          </span>
+                        </td>
+                      </tr>
                       <tr v-if="metadata.copilotVersion">
                         <td>CLI Version</td>
                         <td>{{ metadata.copilotVersion }}</td>
@@ -2170,7 +2269,7 @@
                         </div>
                       </div>
 
-                      <!-- Regular content -->
+                      <!-- Regular content (unified format from server) -->
                       <div v-else-if="item.data?.message || item.data?.text || item.data?.content || item.data?.transformedContent">
                         <div
                           class="event-content"
@@ -2197,6 +2296,12 @@
                         </div>
                       </div>
                       
+                      <!-- No content at all (no message and no tools) -->
+                      <div v-else-if="!hasTools(item)" class="event-content" style="color: #7d8590; font-style: italic;">
+                        No available message
+                      </div>
+                      
+                      <!-- Tool calls section (independent of message content) -->
                       <div v-if="hasTools(item)" class="tool-list">
                         <div
                           v-for="(group, idx) in getToolGroups(item)"

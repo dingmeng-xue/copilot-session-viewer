@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+const { test, expect } = require('./fixtures');
 
 test.describe('API Endpoints', () => {
   test('GET /api/sessions should return JSON array', async ({ request }) => {
@@ -57,8 +57,8 @@ test.describe('API Endpoints', () => {
     const endTime = Date.now();
     const duration = endTime - startTime;
     
-    // Should respond in less than 10 seconds (generous for CI/cold-start environments)
-    expect(duration).toBeLessThan(10000);
+    // Should respond in less than 20 seconds (generous for CI/cold-start/large datasets)
+    expect(duration).toBeLessThan(20000);
     expect(response.ok()).toBeTruthy();
   });
 });

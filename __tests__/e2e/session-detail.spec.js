@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+const { test, expect } = require('./fixtures');
 
 test.describe('Session Detail Page', () => {
   // Use a known session ID from your test environment
@@ -189,15 +189,19 @@ test.describe('Session Detail Page', () => {
     const showMoreButton = page.locator('button').filter({ hasText: 'Show more ▼' }).first();
     
     if (await showMoreButton.count() > 0) {
-      // Click "Show more"
-      await showMoreButton.click();
+      // Scroll element into view (works with virtual scrolling)
+      await showMoreButton.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(300);
+      
+      // Click "Show more" - use force:true for virtual scroll compatibility
+      await showMoreButton.click({ force: true });
       await page.waitForTimeout(300);
       
       // Button text should change to "Show less"
       await expect(showMoreButton).toContainText('Show less ▲');
       
       // Click "Show less"
-      await showMoreButton.click();
+      await showMoreButton.click({ force: true });
       await page.waitForTimeout(300);
       
       // Button text should change back

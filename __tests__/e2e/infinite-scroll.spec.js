@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+const { test, expect } = require('./fixtures');
 
 test.describe('Infinite Scroll', () => {
   test.beforeEach(async ({ page }) => {

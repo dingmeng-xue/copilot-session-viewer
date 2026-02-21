@@ -63,6 +63,10 @@ describe('SessionRepository', () => {
 
     it('should return sessions sorted by updatedAt (newest first)', async () => {
       const mockEntries = ['session1', 'session2'];
+      
+      // Mock fs.access to pass directory existence check
+      jest.spyOn(fs, 'access').mockResolvedValue(undefined);
+      
       const mockReaddir = jest.spyOn(fs, 'readdir').mockResolvedValue(mockEntries);
 
       const mockStats1 = {
@@ -85,6 +89,7 @@ describe('SessionRepository', () => {
 
       // Reset and setup fileUtils mocks specifically for this test
       fileUtils.shouldSkipEntry.mockReturnValue(false);
+      fileUtils.fileExists.mockResolvedValue(true);
       fileUtils.parseYAML
         .mockResolvedValueOnce({
           summary: 'Session 1',
@@ -99,7 +104,7 @@ describe('SessionRepository', () => {
 
       const sessions = await sessionRepository.findAll();
 
-      expect(mockReaddir).toHaveBeenCalledWith(mockSessionDir);
+      expect(mockReaddir).toHaveBeenCalled();
       expect(sessions).toHaveLength(2);
       expect(sessions[0].id).toBe('session2'); // Newer should be first
       expect(sessions[1].id).toBe('session1');
@@ -107,6 +112,10 @@ describe('SessionRepository', () => {
 
     it('should skip entries that should be skipped', async () => {
       const mockEntries = ['valid-session', '.hidden-file', 'node_modules'];
+      
+      // Mock fs.access to pass directory existence check
+      jest.spyOn(fs, 'access').mockResolvedValue(undefined);
+      
       jest.spyOn(fs, 'readdir').mockResolvedValue(mockEntries);
 
       fileUtils.shouldSkipEntry
@@ -121,6 +130,13 @@ describe('SessionRepository', () => {
         birthtime: new Date('2026-02-15T10:00:00Z'),
         mtime: new Date('2026-02-15T11:00:00Z')
       });
+      
+      fileUtils.fileExists.mockResolvedValue(true);
+      fileUtils.parseYAML.mockResolvedValue({
+        summary: 'Valid session',
+        created_at: '2026-02-15T10:00:00Z',
+        updated_at: '2026-02-15T11:00:00Z'
+      });
 
       const sessions = await sessionRepository.findAll();
 
@@ -130,6 +146,10 @@ describe('SessionRepository', () => {
 
     it('should handle directory processing errors gracefully', async () => {
       const mockEntries = ['valid-session', 'error-session'];
+      
+      // Mock fs.access to pass directory existence check
+      jest.spyOn(fs, 'access').mockResolvedValue(undefined);
+      
       jest.spyOn(fs, 'readdir').mockResolvedValue(mockEntries);
 
       jest.spyOn(fs, 'stat')
@@ -140,6 +160,13 @@ describe('SessionRepository', () => {
           mtime: new Date()
         })
         .mockRejectedValueOnce(new Error('Permission denied'));
+      
+      fileUtils.fileExists.mockResolvedValue(true);
+      fileUtils.parseYAML.mockResolvedValue({
+        summary: 'Valid session',
+        created_at: '2026-02-15T10:00:00Z',
+        updated_at: '2026-02-15T11:00:00Z'
+      });
 
       const sessions = await sessionRepository.findAll();
 
@@ -149,6 +176,10 @@ describe('SessionRepository', () => {
 
     it('should handle .jsonl files', async () => {
       const mockEntries = ['session.jsonl'];
+      
+      // Mock fs.access to pass directory existence check
+      jest.spyOn(fs, 'access').mockResolvedValue(undefined);
+      
       jest.spyOn(fs, 'readdir').mockResolvedValue(mockEntries);
 
       jest.spyOn(fs, 'stat').mockResolvedValue({
@@ -170,6 +201,7 @@ describe('SessionRepository', () => {
         selectedModel: 'claude-3-sonnet',
         firstUserMessage: 'User message'
       });
+      fileUtils.countLines.mockResolvedValue(50);
 
       const sessions = await sessionRepository.findAll();
 

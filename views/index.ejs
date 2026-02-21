@@ -280,6 +280,64 @@
       border-color: #e8b634;
       border-left-color: #e8b634;
     }
+    /* Source badges */
+    .status-badge.source-copilot {
+      padding: 2px 8px;
+      background: rgba(88, 166, 255, 0.15);
+      color: #58a6ff;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    }
+    .status-badge.source-claude {
+      padding: 2px 8px;
+      background: rgba(204, 120, 92, 0.15);
+      color: #e8956f;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    }
+    .status-badge.source-pi-mono {
+      padding: 2px 8px;
+      background: rgba(138, 102, 204, 0.15);
+      color: #a78bdb;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    }
+
+    /* Filter pills */
+    .filter-pills {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .filter-pill {
+      padding: 6px 16px;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 20px;
+      color: #8b949e;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      min-height: 32px;
+    }
+    .filter-pill:hover {
+      background: #30363d;
+      border-color: #58a6ff;
+      color: #c9d1d9;
+    }
+    .filter-pill.active {
+      background: #58a6ff;
+      border-color: #58a6ff;
+      color: #fff;
+    }
 
     /* Sessions header with import link */
     .sessions-header {
@@ -412,6 +470,12 @@
           </div>
           <a class="import-link" id="importLink">Import session from zip</a>
         </div>
+        <div class="filter-pills">
+          <button class="filter-pill active" data-source="all">All</button>
+          <button class="filter-pill" data-source="copilot">Copilot</button>
+          <button class="filter-pill" data-source="claude">Claude</button>
+          <button class="filter-pill" data-source="pi-mono">Pi</button>
+        </div>
         <input
           type="file"
           id="fileInput"
@@ -449,6 +513,9 @@
     let currentOffset = initialSessions.length;
     let hasMore = hasMoreFromServer;
     let isLoading = false;
+
+    // Filter state
+    let currentSourceFilter = 'all';
     // Load more sessions
     async function loadMoreSessions() {
       if (isLoading || !hasMore) return;
@@ -493,14 +560,27 @@
       loadMoreSection.style.display = hasMore && !isLoading ? 'block' : 'none';
     }
 
+    // Get filtered sessions based on current filter
+    function getFilteredSessions() {
+      if (currentSourceFilter === 'all') {
+        return allSessions;
+      }
+      return allSessions.filter(session => session.source === currentSourceFilter);
+    }
+
     // Render all sessions (grouped by date)
     function renderAllSessions() {
       const container = document.getElementById('sessions-container');
       container.innerHTML = ''; // Clear existing
 
-      if (allSessions.length === 0) return;
+      const filteredSessions = getFilteredSessions();
 
-      const grouped = groupSessionsByDate(allSessions);
+      if (filteredSessions.length === 0) {
+        container.innerHTML = '<div style="text-align: center; color: #6e7681; padding: 40px; font-size: 14px;">No sessions found for this filter.</div>';
+        return;
+      }
+
+      const grouped = groupSessionsByDate(filteredSessions);
       const sortedDates = Object.keys(grouped).sort((a, b) => b.localeCompare(a)); // Descending
 
       sortedDates.forEach(dateKey => {
@@ -669,6 +749,21 @@
     function renderSessionCard(session) {
       // Add status badges
       let badges = '';
+
+      // Add source badge (at the beginning)
+      let sourceClass, sourceLabel;
+      if (session.source === 'claude') {
+        sourceClass = 'source-claude';
+        sourceLabel = 'Claude';
+      } else if (session.source === 'pi-mono') {
+        sourceClass = 'source-pi-mono';
+        sourceLabel = 'Pi';
+      } else {
+        sourceClass = 'source-copilot';
+        sourceLabel = 'Copilot';
+      }
+      badges += `<span class="status-badge ${sourceClass}" title="${sourceLabel} CLI">${sourceLabel}</span>`;
+
       if (session.sessionStatus === 'wip') {
         badges += '<span class="status-badge wip" title="Session in progress">🔄 WIP</span>';
       }
@@ -758,6 +853,25 @@
       return div.innerHTML;
     }
 
+    // Filter pill click handler
+    function setupFilterPills() {
+      const filterPills = document.querySelectorAll('.filter-pill');
+      filterPills.forEach(pill => {
+        pill.addEventListener('click', () => {
+          // Remove active class from all pills
+          filterPills.forEach(p => p.classList.remove('active'));
+          // Add active class to clicked pill
+          pill.classList.add('active');
+
+          // Update filter state
+          currentSourceFilter = pill.getAttribute('data-source');
+
+          // Re-render sessions with filter
+          renderAllSessions();
+        });
+      });
+    }
+
     // Render grouped sessions
     document.addEventListener('DOMContentLoaded', function() {
       // Initial render
@@ -769,6 +883,15 @@
 
       // Add click listener for load more button
       document.getElementById('load-more-btn').addEventListener('click', loadMoreSessions);
+
+      // Setup filter pills
+      setupFilterPills();
+
+      // Auto-select Pi-Mono filter pill
+      const piPill = document.querySelector('.filter-pill[data-source="pi-mono"]');
+      if (piPill) {
+        piPill.click();
+      }
     });
   </script>
   

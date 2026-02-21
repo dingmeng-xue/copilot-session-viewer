@@ -1,74 +1,288 @@
 const fs = require('fs').promises;
 const path = require('path');
+const os = require('os');
 const Session = require('../models/Session');
 const { fileExists, countLines, parseYAML, getSessionMetadataOptimized, shouldSkipEntry } = require('../utils/fileUtils');
+const { ParserFactory } = require('../../lib/parsers');
 
 /**
  * Session Repository - Data access layer for sessions
+ * Supports both Copilot CLI and Claude Code sessions
  */
 class SessionRepository {
-  constructor(sessionDir) {
-    this.sessionDir = sessionDir;
+  constructor(sessionDirs) {
+    // Support both old (single dir) and new (multi-source) initialization
+    if (typeof sessionDirs === 'string') {
+      this.sources = [{
+        type: 'copilot',
+        dir: sessionDirs
+      }];
+    } else if (Array.isArray(sessionDirs)) {
+      this.sources = sessionDirs;
+    } else {
+      // Default: Copilot + Claude + Pi-Mono
+      this.sources = [
+        {
+          type: 'copilot',
+          dir: path.join(os.homedir(), '.copilot', 'session-state')
+        },
+        {
+          type: 'claude',
+          dir: path.join(os.homedir(), '.claude', 'projects')
+        },
+        {
+          type: 'pi-mono',
+          dir: path.join(os.homedir(), '.pi', 'agent', 'sessions')
+        }
+      ];
+    }
+    
+    this.parserFactory = new ParserFactory();
   }
 
   /**
-   * Get all sessions
+   * Get all sessions from all sources
    * @returns {Promise<Session[]>} Array of sessions sorted by updatedAt (newest first)
    */
   async findAll() {
+    const allSessions = [];
+
+    for (const source of this.sources) {
+      try {
+        const sessions = await this._scanSource(source);
+        allSessions.push(...sessions);
+      } catch (err) {
+        console.error(`Error reading ${source.type} sessions from ${source.dir}:`, err.message);
+      }
+    }
+
+    return this._sortByUpdatedAt(allSessions);
+  }
+
+  /**
+   * Scan a single source directory
+   * @private
+   */
+  async _scanSource(source) {
     try {
-      const entries = await fs.readdir(this.sessionDir);
+      await fs.access(source.dir);
+    } catch {
+      console.warn(`Source directory not found: ${source.dir}`);
+      return [];
+    }
 
-      const tasks = entries
-        .filter(entry => !shouldSkipEntry(entry))
-        .map(async (entry) => {
-          const fullPath = path.join(this.sessionDir, entry);
-          const stats = await fs.stat(fullPath);
+    const entries = await fs.readdir(source.dir);
+    const tasks = entries
+      .filter(entry => !shouldSkipEntry(entry))
+      .map(async (entry) => {
+        const fullPath = path.join(source.dir, entry);
+        const stats = await fs.stat(fullPath);
 
+        if (source.type === 'copilot') {
+          // Copilot: directory-based or .jsonl files
           if (stats.isDirectory()) {
-            return this._createDirectorySession(entry, fullPath, stats);
+            return this._createDirectorySession(entry, fullPath, stats, 'copilot');
           } else if (entry.endsWith('.jsonl')) {
-            return this._createFileSession(entry, fullPath, stats);
+            return this._createFileSession(entry, fullPath, stats, 'copilot');
           }
-          return null;
-        });
+        } else if (source.type === 'claude') {
+          // Claude: all directories contain .jsonl files named by sessionId
+          if (stats.isDirectory()) {
+            return this._scanClaudeProjectDir(fullPath, entry);
+          }
+        } else if (source.type === 'pi-mono') {
+          // Pi-Mono: project directories containing timestamped .jsonl files
+          if (stats.isDirectory()) {
+            return this._scanPiMonoDir(fullPath, entry);
+          }
+        }
+        return null;
+      });
 
-      const results = await Promise.allSettled(tasks);
-      const sessions = results
-        .filter(r => r.status === 'fulfilled' && r.value !== null && r.value !== undefined)
-        .map(r => r.value);
+    const results = await Promise.allSettled(tasks);
+    return results
+      .filter(r => r.status === 'fulfilled' && r.value !== null && r.value !== undefined)
+      .map(r => r.value)
+      .flat(); // flat() because scanClaudeProjectDir returns array
+  }
 
-      return this._sortByUpdatedAt(sessions);
+  /**
+   * Scan Claude project directory (contains multiple session .jsonl files AND directories with subagents)
+   * @private
+   */
+  async _scanClaudeProjectDir(projectDir, projectName) {
+    try {
+      const entries = await fs.readdir(projectDir);
+      const sessions = [];
+
+      for (const entry of entries) {
+        if (shouldSkipEntry(entry)) continue;
+
+        const fullPath = path.join(projectDir, entry);
+        const stats = await fs.stat(fullPath);
+        
+        // Handle .jsonl files (main session files)
+        if (stats.isFile() && entry.endsWith('.jsonl')) {
+          const session = await this._createClaudeSession(entry, fullPath, stats, projectName);
+          if (session) {
+            sessions.push(session);
+          }
+        }
+        
+        // Handle directories (potential subagents-only sessions)
+        if (stats.isDirectory()) {
+          // Check if this directory has a subagents subdirectory
+          const subagentsDir = path.join(fullPath, 'subagents');
+          try {
+            const subStats = await fs.stat(subagentsDir);
+            if (subStats.isDirectory()) {
+              // This is a valid subagents-only session
+              const session = await this._createClaudeSubagentsSession(entry, fullPath, stats, projectName);
+              if (session) {
+                sessions.push(session);
+              }
+            }
+          } catch {
+            // No subagents directory, not a session directory
+          }
+        }
+      }
+
+      return sessions;
     } catch (err) {
-      console.error('Error reading sessions:', err);
+      console.error(`Error scanning Claude project dir ${projectDir}:`, err.message);
       return [];
     }
   }
 
   /**
-   * Find session by ID
+   * Create Claude Code session from .jsonl file
+   * @private
+   */
+  async _createClaudeSession(entry, fullPath, stats, projectName) {
+    const sessionId = entry.replace('.jsonl', '');
+    const eventCount = await countLines(fullPath);
+
+    console.log(`[DEBUG] _createClaudeSession: ${entry}, events: ${eventCount}`);
+
+    // Read events to extract metadata and VALIDATE format
+    try {
+      const content = await fs.readFile(fullPath, 'utf-8');
+      const lines = content.trim().split('\n').filter(line => line.trim());
+      const events = lines.map(line => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      }).filter(e => e !== null);
+
+      console.log(`[DEBUG] Parsed ${events.length} events from ${entry}`);
+
+      // VALIDATION: Check if this has Claude CORE events (assistant, user)
+      // Ignore metadata events like file-history-snapshot, progress (可以共存)
+      const hasClaudeCoreEvents = events.some(e => e.type === 'assistant' || e.type === 'user');
+      const hasCopilotCoreEvents = events.some(e => e.type === 'assistant.message' || e.type === 'user.message');
+      
+      console.log(`[DEBUG] ${entry}: hasClaudeCoreEvents=${hasClaudeCoreEvents}, hasCopilotCoreEvents=${hasCopilotCoreEvents}`);
+      
+      if (!hasClaudeCoreEvents && hasCopilotCoreEvents) {
+        console.warn(`File ${fullPath} contains only Copilot core events, skipping as Claude session`);
+        return null;
+      }
+      
+      // If no Claude core events, also skip (empty or invalid file)
+      if (!hasClaudeCoreEvents) {
+        console.warn(`File ${fullPath} has no Claude core events (assistant/user), skipping`);
+        return null;
+      }
+
+      console.log(`[DEBUG] ${entry} passed validation, creating session...`);
+
+      // Use parser to extract metadata
+      const parserType = this.parserFactory.getParserType(events);
+      if (parserType !== 'claude') {
+        // Not a valid Claude session
+        return null;
+      }
+
+      const parsed = this.parserFactory.parse(events);
+      const metadata = parsed.metadata || {};
+
+      // Extract project name from directory name (convert back from dashes to slashes)
+      const projectPath = projectName.replace(/^-/, '/').replace(/-/g, '/');
+
+      return new Session(sessionId, 'file', {
+        source: 'claude',
+        workspace: {
+          summary: metadata.model ? `Claude Code session (${metadata.model})` : 'Claude Code session',
+          cwd: metadata.cwd || projectPath
+        },
+        createdAt: metadata.startTime || stats.birthtime,
+        updatedAt: stats.mtime,
+        summary: parsed.turns[0]?.userMessage?.content?.substring(0, 100) || 'No summary',
+        hasEvents: eventCount > 0,
+        eventCount: eventCount,
+        duration: null, // Claude format doesn't have explicit duration
+        isImported: false,
+        hasInsight: false,
+        copilotVersion: metadata.version,
+        selectedModel: metadata.model,
+        sessionStatus: 'completed'
+      });
+    } catch (err) {
+      console.error(`Error creating Claude session ${sessionId}:`, err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Find session by ID (searches all sources)
    * @param {string} sessionId - Session ID
    * @returns {Promise<Session|null>}
    */
   async findById(sessionId) {
     if (shouldSkipEntry(sessionId)) return null;
 
-    try {
-      // Try directory first
-      const dirPath = path.join(this.sessionDir, sessionId);
-      const dirStats = await fs.stat(dirPath);
-      if (dirStats.isDirectory()) {
-        return await this._createDirectorySession(sessionId, dirPath, dirStats);
+    for (const source of this.sources) {
+      let session = null;
+
+      if (source.type === 'copilot') {
+        session = await this._findCopilotSession(sessionId, source.dir);
+      } else if (source.type === 'claude') {
+        session = await this._findClaudeSession(sessionId, source.dir);
+      } else if (source.type === 'pi-mono') {
+        session = await this._findPiMonoSession(sessionId, source.dir);
       }
-    } catch {
-      // Not a directory, try .jsonl file
+
+      if (session) return session;
     }
 
+    return null;
+  }
+
+  /**
+   * Find Copilot session by ID
+   * @private
+   */
+  async _findCopilotSession(sessionId, sessionDir) {
+    // Try directory first
     try {
-      const filePath = path.join(this.sessionDir, `${sessionId}.jsonl`);
+      const dirPath = path.join(sessionDir, sessionId);
+      const dirStats = await fs.stat(dirPath);
+      if (dirStats.isDirectory()) {
+        return await this._createDirectorySession(sessionId, dirPath, dirStats, 'copilot');
+      }
+    } catch {
+      // Not a directory
+    }
+
+    // Try .jsonl file
+    try {
+      const filePath = path.join(sessionDir, `${sessionId}.jsonl`);
       const fileStats = await fs.stat(filePath);
       if (fileStats.isFile()) {
-        return await this._createFileSession(`${sessionId}.jsonl`, filePath, fileStats);
+        return await this._createFileSession(`${sessionId}.jsonl`, filePath, fileStats, 'copilot');
       }
     } catch {
       // File not found
@@ -78,21 +292,205 @@ class SessionRepository {
   }
 
   /**
-   * Create session from directory
+   * Find Claude session by ID (searches all project directories)
    * @private
    */
-  async _createDirectorySession(entry, fullPath, stats) {
+  async _findClaudeSession(sessionId, projectsDir) {
+    try {
+      const projects = await fs.readdir(projectsDir);
+      
+      for (const project of projects) {
+        const projectPath = path.join(projectsDir, project);
+        
+        // Try main session file first
+        const sessionFile = path.join(projectPath, `${sessionId}.jsonl`);
+        try {
+          const stats = await fs.stat(sessionFile);
+          if (stats.isFile()) {
+            console.log(`[DEBUG] Found file: ${sessionFile}`);
+            const session = await this._createClaudeSession(`${sessionId}.jsonl`, sessionFile, stats, project);
+            // If file contains Copilot events (validation failed), continue to check directory
+            if (session) {
+              console.log('[DEBUG] File validated as Claude session, returning');
+              return session;
+            }
+            console.log('[DEBUG] File validation failed, checking directory...');
+            // Otherwise fall through to check directory
+          }
+        } catch (err) {
+          // Main file not found, try directory
+          console.log(`[DEBUG] File not found: ${sessionFile}, error: ${err.message}`);
+        }
+        
+        // Try session directory (subagents-only sessions, or when file validation failed)
+        const sessionDir = path.join(projectPath, sessionId);
+        console.log(`[DEBUG] Checking directory: ${sessionDir}`);
+        try {
+          const dirStats = await fs.stat(sessionDir);
+          if (dirStats.isDirectory()) {
+            console.log('[DEBUG] Directory exists, checking for subagents...');
+            // Check if it has subagents subdirectory
+            const subagentsDir = path.join(sessionDir, 'subagents');
+            try {
+              const subStats = await fs.stat(subagentsDir);
+              if (subStats.isDirectory()) {
+                console.log('[DEBUG] Found subagents directory, creating session...');
+                // Valid Claude subagents-only session
+                const result = await this._createClaudeSubagentsSession(sessionId, sessionDir, dirStats, project);
+                console.log('[DEBUG] Created subagents session:', result ? 'SUCCESS' : 'FAILED');
+                return result;
+              }
+            } catch (err) {
+              // No subagents directory
+              console.log(`[DEBUG] No subagents directory: ${err.message}`);
+            }
+          }
+        } catch (err) {
+          // Directory not found, continue
+          console.log(`[DEBUG] Directory not found: ${err.message}`);
+        }
+      }
+    } catch (err) {
+      // Projects dir not found
+      console.error(`[DEBUG] Projects dir error: ${err.message}`);
+    }
+
+    console.log(`[DEBUG] Session ${sessionId} not found in any project`);
+    return null;
+  }
+
+  /**
+   * Find Pi-Mono session by ID (searches all project directories)
+   * @private
+   */
+  async _findPiMonoSession(sessionId, sessionsDir) {
+    try {
+      const projects = await fs.readdir(sessionsDir);
+      
+      for (const projectDir of projects) {
+        const projectPath = path.join(sessionsDir, projectDir);
+        
+        try {
+          const files = await fs.readdir(projectPath);
+          // Look for file matching pattern: *_<sessionId>.jsonl
+          const matchingFile = files.find(f => f.includes(`_${sessionId}.jsonl`));
+          
+          if (matchingFile) {
+            const filePath = path.join(projectPath, matchingFile);
+            const stats = await fs.stat(filePath);
+            
+            // Read first line for metadata
+            const firstLine = await this._readFirstLine(filePath);
+            if (firstLine) {
+              const sessionEvent = JSON.parse(firstLine);
+              if (sessionEvent.type === 'session') {
+                const projectName = projectDir.replace(/^--/, '').replace(/--$/, '');
+                const eventCount = await countLines(filePath);
+                
+                return new Session(
+                  sessionId,
+                  'directory',
+                  {
+                    source: 'pi-mono',
+                    workspace: { cwd: sessionEvent.cwd || projectName },
+                    createdAt: new Date(sessionEvent.timestamp),
+                    updatedAt: new Date(stats.mtime),
+                    summary: `Pi-Mono: ${path.basename(sessionEvent.cwd || projectName)}`,
+                    hasEvents: eventCount > 0,
+                    eventCount: eventCount,
+                    duration: null,
+                    sessionStatus: 'completed'
+                  }
+                );
+              }
+            }
+          }
+        } catch {
+          // Not a directory or can't read
+        }
+      }
+    } catch (err) {
+      console.error(`Error searching Pi-Mono sessions: ${err.message}`);
+    }
+    
+    return null;
+  }
+
+  /**
+   * Create Claude session from subagents-only directory (no main events.jsonl)
+   * @private
+   */
+  async _createClaudeSubagentsSession(sessionId, sessionDir, stats, projectName) {
+    try {
+      const subagentsDir = path.join(sessionDir, 'subagents');
+      const files = await fs.readdir(subagentsDir);
+      const subagentFiles = files.filter(f => f.startsWith('agent-') && f.endsWith('.jsonl'));
+      
+      if (subagentFiles.length === 0) {
+        return null;
+      }
+      
+      // Count events from all subagent files
+      let totalEvents = 0;
+      for (const file of subagentFiles) {
+        const filePath = path.join(subagentsDir, file);
+        totalEvents += await countLines(filePath);
+      }
+      
+      // Read first subagent file for metadata
+      const firstFile = path.join(subagentsDir, subagentFiles[0]);
+      const content = await fs.readFile(firstFile, 'utf-8');
+      const lines = content.trim().split('\n').filter(line => line.trim());
+      const firstEvent = lines.length > 0 ? JSON.parse(lines[0]) : null;
+      
+      const metadata = {
+        cwd: firstEvent?.cwd || projectName,
+        version: firstEvent?.version,
+        model: firstEvent?.message?.model,
+        startTime: firstEvent?.timestamp
+      };
+      
+      const projectPath = projectName.replace(/^-/, '/').replace(/-/g, '/');
+      
+      return new Session(sessionId, 'directory', {
+        source: 'claude',
+        workspace: {
+          summary: `Claude session (${subagentFiles.length} sub-agents)`,
+          cwd: metadata.cwd || projectPath
+        },
+        createdAt: metadata.startTime || stats.birthtime,
+        updatedAt: stats.mtime,
+        summary: firstEvent?.message?.content?.substring(0, 100) || 'Sub-agent tasks',
+        hasEvents: totalEvents > 0,
+        eventCount: totalEvents,
+        duration: null,
+        isImported: false,
+        hasInsight: false,
+        copilotVersion: metadata.version,
+        selectedModel: metadata.model,
+        sessionStatus: 'completed'
+      });
+    } catch (err) {
+      console.error(`Error creating Claude subagents session ${sessionId}:`, err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Create session from directory (Copilot format)
+   * @private
+   */
+  async _createDirectorySession(entry, fullPath, stats, source = 'copilot') {
     const workspaceFile = path.join(fullPath, 'workspace.yaml');
     const eventsFile = path.join(fullPath, 'events.jsonl');
     const importedMarkerFile = path.join(fullPath, '.imported');
     const insightReportFile = path.join(fullPath, 'agent-review.md');
 
-    // Check if workspace.yaml exists
-    if (!await fileExists(workspaceFile)) {
-      return null; // Skip directories without workspace.yaml
-    }
-
-    const workspace = await parseYAML(workspaceFile);
+    // Parse workspace.yaml if exists, otherwise use defaults
+    const workspace = await fileExists(workspaceFile) 
+      ? await parseYAML(workspaceFile)
+      : { summary: entry, repo: 'unknown' };
+    
     const eventCount = await fileExists(eventsFile) ? await countLines(eventsFile) : 0;
     const isImported = await fileExists(importedMarkerFile);
     const hasInsight = await fileExists(insightReportFile);
@@ -109,36 +507,30 @@ class SessionRepository {
       copilotVersion = optimizedMetadata.copilotVersion;
       selectedModel = optimizedMetadata.selectedModel;
 
-      // Compute session status:
-      //   - has session.end → completed
-      //   - no session.end + last event < 5 min ago → wip (actively running)
-      //   - no session.end + last event ≥ 5 min ago → unfinished (crashed/aborted)
       sessionStatus = this._computeSessionStatus(optimizedMetadata);
 
-      // Fallback: if no summary in workspace, use first user message from optimized read
       if (!workspace.summary && optimizedMetadata.firstUserMessage) {
         workspace.summary = optimizedMetadata.firstUserMessage;
       }
     }
 
-    return Session.fromDirectory(fullPath, entry, stats, workspace, eventCount, duration, isImported, hasInsight, copilotVersion, selectedModel, sessionStatus);
+    const session = Session.fromDirectory(fullPath, entry, stats, workspace, eventCount, duration, isImported, hasInsight, copilotVersion, selectedModel, sessionStatus);
+    session.source = source;
+    return session;
   }
 
   /**
-   * Create session from .jsonl file
+   * Create session from .jsonl file (Copilot format)
    * @private
    */
-  async _createFileSession(entry, fullPath, stats) {
+  async _createFileSession(entry, fullPath, stats, source = 'copilot') {
     const sessionId = entry.replace('.jsonl', '');
     const eventCount = await countLines(fullPath);
 
-    // Use optimized single-pass metadata extraction
     const optimizedMetadata = await getSessionMetadataOptimized(fullPath);
-
-    // Compute session status
     const sessionStatus = this._computeSessionStatus(optimizedMetadata);
 
-    return Session.fromFile(
+    const session = Session.fromFile(
       fullPath,
       sessionId,
       stats,
@@ -149,25 +541,159 @@ class SessionRepository {
       optimizedMetadata.selectedModel,
       sessionStatus
     );
+    session.source = source;
+    return session;
   }
 
   /**
    * Compute session status from metadata
    * @private
-   * @param {Object} metadata - Optimized metadata from getSessionMetadataOptimized
-   * @returns {string} 'completed' | 'wip'
    */
   _computeSessionStatus(metadata) {
     if (metadata.hasSessionEnd) {
       return 'completed';
     }
     if (metadata.lastEventTime !== null && metadata.lastEventTime !== undefined) {
-      const WIP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+      const WIP_THRESHOLD_MS = 5 * 60 * 1000;
       if ((Date.now() - metadata.lastEventTime) < WIP_THRESHOLD_MS) {
         return 'wip';
       }
     }
     return 'completed';
+  }
+
+  /**
+   * Scan Pi-Mono project directory (--project-path--)
+   * Contains timestamped .jsonl files: YYYY-MM-DDTHH-mm-ss-SSSZ_<uuid>.jsonl
+   * @private
+   */
+  async _scanPiMonoDir(projectDir, dirName) {
+    try {
+      console.log(`[PI-MONO] Scanning directory: ${projectDir}`);
+      const entries = await fs.readdir(projectDir);
+      const jsonlFiles = entries.filter(e => e.endsWith('.jsonl'));
+
+      console.log(`[PI-MONO] Found ${jsonlFiles.length} .jsonl files in ${dirName}`);
+      
+      if (jsonlFiles.length === 0) {
+        return [];
+      }
+
+      const sessions = [];
+
+      // Sort files by name (timestamp) to get latest
+      jsonlFiles.sort().reverse();
+
+      for (const file of jsonlFiles) {
+        const fullPath = path.join(projectDir, file);
+        const stats = await fs.stat(fullPath);
+
+        // Extract session ID from filename: YYYY-MM-DD...Z_<uuid>.jsonl
+        const match = file.match(/_([a-f0-9-]+)\.jsonl$/);
+        if (!match) {
+          console.log(`[PI-MONO] Skipping ${file}: no UUID match`);
+          continue;
+        }
+
+        const sessionId = match[1];
+
+        // Read first line to get session metadata
+        const firstLine = await this._readFirstLine(fullPath);
+        if (!firstLine) {
+          console.log(`[PI-MONO] Skipping ${file}: no first line`);
+          continue;
+        }
+
+        try {
+          const sessionEvent = JSON.parse(firstLine);
+          if (sessionEvent.type !== 'session') {
+            console.log(`[PI-MONO] Skipping ${file}: first event type is ${sessionEvent.type}, not 'session'`);
+            continue;
+          }
+
+          // Count events in the file
+          const eventCount = await countLines(fullPath);
+
+          // Extract project name from directory (remove -- prefix/suffix)
+          const projectPath = dirName.replace(/^--/, '').replace(/--$/, '');
+
+          const session = new Session(
+            sessionId,
+            'directory',
+            {
+              source: 'pi-mono',
+              workspace: { cwd: sessionEvent.cwd || projectPath },
+              createdAt: new Date(sessionEvent.timestamp),
+              updatedAt: new Date(stats.mtime),
+              summary: `Pi-Mono: ${path.basename(sessionEvent.cwd || projectPath)}`,
+              hasEvents: eventCount > 0,
+              eventCount: eventCount,
+              duration: null,
+              sessionStatus: 'completed'
+            }
+          );
+
+          console.log(`[PI-MONO] Created session: ${sessionId} from ${file}`);
+          sessions.push(session);
+        } catch (err) {
+          console.error(`[PI-MONO] Error parsing session ${file}:`, err.message);
+        }
+      }
+
+      console.log(`[PI-MONO] Total sessions found in ${dirName}: ${sessions.length}`);
+      return sessions;
+    } catch (err) {
+      console.error(`[PI-MONO] Error scanning dir ${projectDir}:`, err.message);
+      return [];
+    }
+  }
+
+  /**
+   * Read first line of a file
+   * @private
+   */
+  async _readFirstLine(filePath) {
+    const fs = require('fs');
+    const readline = require('readline');
+    
+    return new Promise((resolve, reject) => {
+      const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+      const rl = readline.createInterface({ 
+        input: stream, 
+        crlfDelay: Infinity 
+      });
+
+      let resolved = false;
+
+      rl.on('line', (line) => {
+        if (!resolved) {
+          resolved = true;
+          rl.close();
+          resolve(line.trim());
+        }
+      });
+
+      rl.on('close', () => {
+        if (!resolved) {
+          resolve(null);
+        }
+      });
+
+      rl.on('error', (err) => {
+        if (!resolved) {
+          resolved = true;
+          reject(err);
+        }
+      });
+
+      stream.on('error', (err) => {
+        if (!resolved) {
+          resolved = true;
+          rl.close();
+          reject(err);
+        }
+      });
+    });
   }
 
   /**

@@ -36,7 +36,17 @@ function createApp(options = {}) {
     }
   }));
 
-  app.use(compression());
+  app.use(compression({
+    level: 9, // Maximum compression for local use (CPU is not a bottleneck)
+    threshold: 1024, // Compress responses > 1KB
+    filter: (req, res) => {
+      // Always compress JSON responses
+      if (res.getHeader('Content-Type')?.includes('application/json')) {
+        return true;
+      }
+      return compression.filter(req, res);
+    }
+  }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
   app.use(requestTimeout);
@@ -67,6 +77,7 @@ function createApp(options = {}) {
   app.get('/api/sessions/load-more', sessionController.loadMoreSessions.bind(sessionController));
   app.get('/api/sessions', sessionController.getSessions.bind(sessionController));
   app.get('/api/sessions/:id/events', sessionController.getSessionEvents.bind(sessionController));
+  app.get('/api/sessions/:id/timeline', sessionController.getTimeline.bind(sessionController));
 
   // Upload routes
   app.get('/session/:id/share', uploadController.shareSession.bind(uploadController));

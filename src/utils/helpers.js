@@ -10,6 +10,7 @@
 function buildMetadata(session) {
   return {
     type: session.type,
+    source: session.source, // 'copilot' or 'claude'
     summary: session.summary,
     model: session.model,
     repo: session.workspace?.repository,
@@ -28,7 +29,11 @@ function buildMetadata(session) {
  * @returns {boolean} True if valid
  */
 function isValidSessionId(sessionId) {
-  return typeof sessionId === 'string' && /^[a-zA-Z0-9_-]+$/.test(sessionId) && sessionId.length < 256;
+  // Allow alphanumeric, underscore, and hyphen (common in UUIDs and session IDs)
+  // Length limit prevents abuse
+  return typeof sessionId === 'string' && 
+         /^[a-zA-Z0-9_-]+$/.test(sessionId) && 
+         sessionId.length < 256;
 }
 
 module.exports = {

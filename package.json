@@ -40,6 +40,7 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:debug": "playwright test --debug",
     "test:all": "npm test && npm run test:e2e",
+    "test:coverage:all": "npm run test:coverage && npm run test:e2e",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",
@@ -50,25 +51,30 @@
   },
   "dependencies": {
     "compression": "^1.8.1",
-    "ejs": "^3.1.9",
+    "ejs": "^4.0.1",
     "express": "^4.18.2",
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/css": "^0.14.1",
     "@eslint/js": "^10.0.1",
     "@eslint/json": "^1.0.1",
     "@eslint/markdown": "^7.5.1",
+    "@istanbuljs/nyc-config-typescript": "^1.0.2",
     "@playwright/test": "^1.58.2",
     "@types/jest": "^30.0.0",
     "adm-zip": "^0.5.16",
     "eslint": "^10.0.0",
     "eslint-plugin-vue": "^10.8.0",
     "globals": "^17.3.0",
+    "istanbul-lib-coverage": "^3.2.2",
     "jest": "^30.2.0",
     "nodemon": "^3.0.1",
-    "supertest": "^7.2.2"
+    "nyc": "^17.1.0",
+    "supertest": "^7.2.2",
+    "v8-to-istanbul": "^9.3.0"
   }
 }
