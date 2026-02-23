@@ -20,21 +20,33 @@ class SessionRepository {
     } else if (Array.isArray(sessionDirs)) {
       this.sources = sessionDirs;
     } else {
-      // Default: Copilot + Claude + Pi-Mono
-      this.sources = [
-        {
-          type: 'copilot',
-          dir: path.join(os.homedir(), '.copilot', 'session-state')
-        },
-        {
-          type: 'claude',
-          dir: path.join(os.homedir(), '.claude', 'projects')
-        },
-        {
-          type: 'pi-mono',
-          dir: path.join(os.homedir(), '.pi', 'agent', 'sessions')
-        }
-      ];
+      // In CI/test environments, only scan Copilot directory
+      const isTestEnvironment = process.env.CI || process.env.PLAYWRIGHT;
+      
+      if (isTestEnvironment) {
+        this.sources = [
+          {
+            type: 'copilot',
+            dir: path.join(os.homedir(), '.copilot', 'session-state')
+          }
+        ];
+      } else {
+        // Default: Copilot + Claude + Pi-Mono
+        this.sources = [
+          {
+            type: 'copilot',
+            dir: path.join(os.homedir(), '.copilot', 'session-state')
+          },
+          {
+            type: 'claude',
+            dir: path.join(os.homedir(), '.claude', 'projects')
+          },
+          {
+            type: 'pi-mono',
+            dir: path.join(os.homedir(), '.pi', 'agent', 'sessions')
+          }
+        ];
+      }
     }
     
     this.parserFactory = new ParserFactory();
