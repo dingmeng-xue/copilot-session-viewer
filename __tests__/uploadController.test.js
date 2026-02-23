@@ -992,8 +992,13 @@ describe('UploadController', () => {
     it('should handle errors during rename in close handler', async () => {
       const sessionId = 'test-session-id';
       const zipPath = path.join(controller.uploadDir, 'test.zip');
-      await fs.promises.mkdir(controller.uploadDir, { recursive: true });
-      await fs.promises.writeFile(zipPath, 'dummy');
+      
+      // Ensure directory exists before writing file (use real fs, not mocked)
+      const realFs = jest.requireActual('fs');
+      if (!realFs.existsSync(controller.uploadDir)) {
+        await realFs.promises.mkdir(controller.uploadDir, { recursive: true });
+      }
+      await realFs.promises.writeFile(zipPath, 'dummy');
 
       const req = { file: { path: zipPath } };
       
@@ -1021,8 +1026,13 @@ describe('UploadController', () => {
     it('should handle cleanup errors gracefully in close handler catch block', async () => {
       const sessionId = 'test-session-id';
       const zipPath = path.join(controller.uploadDir, 'test.zip');
-      await fs.promises.mkdir(controller.uploadDir, { recursive: true });
-      await fs.promises.writeFile(zipPath, 'dummy');
+      
+      // Ensure directory exists before writing file (use real fs, not mocked)
+      const realFs = jest.requireActual('fs');
+      if (!realFs.existsSync(controller.uploadDir)) {
+        await realFs.promises.mkdir(controller.uploadDir, { recursive: true });
+      }
+      await realFs.promises.writeFile(zipPath, 'dummy');
 
       const req = { file: { path: zipPath } };
       
