@@ -55,6 +55,9 @@ jobs:
         run: npm run test:e2e
         env:
           PORT: 3838
+          COPILOT_SESSION_DIR: ${{ runner.home }}/.copilot/session-state
+          CLAUDE_SESSION_DIR: ${{ runner.home }}/.claude/projects
+          PI_MONO_SESSION_DIR: ${{ runner.home }}/.pi/agent/sessions
       
       - name: Upload test results
         if: failure()

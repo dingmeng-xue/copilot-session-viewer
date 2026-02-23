@@ -45,6 +45,7 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 10 * 1000,
     env: {
+      ...process.env, // Inherit all environment variables (HOME, session dirs, etc.)
       PLAYWRIGHT: '1', // Disable rate limiting during E2E tests
     },
   },
