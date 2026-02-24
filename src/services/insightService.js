@@ -58,13 +58,24 @@ class InsightService {
     const lockFile = path.join(sessionPath, 'agent-review.md.lock');
     
     // Determine events file location based on directory structure
-    // Try standard events.jsonl first, then <sessionId>.jsonl (for file-type sessions)
+    // Try standard events.jsonl first, then <sessionId>.jsonl (for file-type sessions),
+    // finally *_<sessionId>.jsonl (for Pi-Mono timestamped sessions)
     let eventsFile = path.join(sessionPath, 'events.jsonl');
     try {
       await fs.access(eventsFile);
     } catch {
       // Try <sessionId>.jsonl (common for Claude file-type sessions)
-      eventsFile = path.join(sessionPath, `${sessionId}.jsonl`);
+      try {
+        eventsFile = path.join(sessionPath, `${sessionId}.jsonl`);
+        await fs.access(eventsFile);
+      } catch {
+        // Try *_<sessionId>.jsonl (Pi-Mono format: YYYY-MM-DDTHH-mm-ss-SSSZ_<uuid>.jsonl)
+        const entries = await fs.readdir(sessionPath);
+        const piFile = entries.find(f => f.endsWith(`_${sessionId}.jsonl`));
+        if (piFile) {
+          eventsFile = path.join(sessionPath, piFile);
+        }
+      }
     }
 
     const toolConfig = this._getToolConfig(source, sessionPath);
@@ -174,6 +185,7 @@ class InsightService {
     const args = toolConfig.args(tmpDir, prompt);
     
     console.log(`🤖 Starting ${toolConfig.name} analysis: ${cliPath} ${args.slice(0, 2).join(' ')}...`);
+    console.log(`📋 Args count: ${args.length}, prompt length: ${prompt.length} chars`);
     
     // Use system PATH - CLI should be in the user's PATH
     const analysisProcess = spawn(cliPath, args, {

@@ -630,6 +630,7 @@ class SessionRepository {
             'directory',
             {
               source: 'pi-mono',
+              directory: projectDir, // Add directory path for Agent Review
               workspace: { cwd: sessionEvent.cwd || projectPath },
               createdAt: new Date(sessionEvent.timestamp),
               updatedAt: new Date(stats.mtime),
