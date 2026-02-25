@@ -1,54 +1,55 @@
 # Session Event Parsers
 
-策略模式实现的 session event 解析器，支持多种格式。
+Strategy pattern implementation for parsing session events from multiple formats.
 
-## 架构
+## Architecture
 
 ```
 lib/parsers/
-├── base-parser.js       # 基础解析器接口
-├── copilot-parser.js    # Copilot CLI 格式解析器
-├── claude-parser.js     # Claude Code 格式解析器
-├── parser-factory.js    # 解析器工厂（自动检测格式）
-└── index.js             # 导出所有解析器
+├── base-parser.js       # Base parser interface
+├── copilot-parser.js    # Copilot CLI format parser
+├── claude-parser.js     # Claude Code format parser
+├── pi-mono-parser.js    # Pi-Mono format parser
+├── parser-factory.js    # Parser factory (auto-detection)
+└── index.js             # Export all parsers
 ```
 
-## 设计模式
+## Design Pattern
 
-### 策略模式 (Strategy Pattern)
+### Strategy Pattern
 
-- **策略接口**: `BaseSessionParser` 定义了所有解析器必须实现的方法
-- **具体策略**: `CopilotSessionParser`, `ClaudeSessionParser` 实现具体解析逻辑
-- **上下文**: `ParserFactory` 自动选择合适的策略
+- **Strategy Interface**: `BaseSessionParser` defines methods all parsers must implement
+- **Concrete Strategies**: `CopilotSessionParser`, `ClaudeSessionParser`, `PiMonoSessionParser` implement specific parsing logic
+- **Context**: `ParserFactory` automatically selects the appropriate strategy
 
-### 优点
+### Benefits
 
-1. **可扩展**: 添加新格式只需实现 `BaseSessionParser`
-2. **解耦**: 解析逻辑与使用者分离
-3. **自动检测**: `ParserFactory` 自动识别格式
-4. **统一接口**: 不同格式输出相同的数据结构
+1. **Extensible**: Add new formats by simply implementing `BaseSessionParser`
+2. **Decoupled**: Parsing logic is separated from consumers
+3. **Auto-detection**: `ParserFactory` automatically identifies formats
+4. **Unified Interface**: Different formats output the same data structure
 
-## 使用方法
+## Usage
 
-### 自动检测格式
+### Auto-detect Format
 
 ```javascript
 const { ParserFactory } = require('./lib/parsers');
 
-const events = [...]; // 从 jsonl 读取的事件
+const events = [...]; // Events read from jsonl
 const factory = new ParserFactory();
 
-// 自动检测并解析
+// Auto-detect and parse
 const result = factory.parse(events);
 
-// 获取解析器类型
-const parserType = factory.getParserType(events); // 'copilot' or 'claude'
+// Get parser type
+const parserType = factory.getParserType(events); // 'copilot', 'claude', or 'pi-mono'
 ```
 
-### 直接使用特定解析器
+### Use Specific Parser Directly
 
 ```javascript
-const { CopilotSessionParser, ClaudeSessionParser } = require('./lib/parsers');
+const { CopilotSessionParser, ClaudeSessionParser, PiMonoSessionParser } = require('./lib/parsers');
 
 // Copilot CLI
 const copilotParser = new CopilotSessionParser();
@@ -61,11 +62,17 @@ const claudeParser = new ClaudeSessionParser();
 if (claudeParser.canParse(events)) {
   const result = claudeParser.parse(events);
 }
+
+// Pi-Mono
+const piMonoParser = new PiMonoSessionParser();
+if (piMonoParser.canParse(events)) {
+  const result = piMonoParser.parse(events);
+}
 ```
 
-## 统一输出格式
+## Unified Output Format
 
-所有解析器输出相同的数据结构：
+All parsers output the same data structure:
 
 ```javascript
 {
@@ -98,20 +105,20 @@ if (claudeParser.canParse(events)) {
     }
   ],
   toolCalls: [...],
-  allEvents: [...] // 原始事件
+  allEvents: [...] // Raw events
 }
 ```
 
-## 支持的格式
+## Supported Formats
 
 ### 1. Copilot CLI Format
 
-**特征:**
-- 事件类型: `session.start`, `user.message`, `assistant.message`, `tool.execution_start`
-- 结构: `{type, data: {...}, id, parentId}`
-- 树形关系: 通过 `parentId` 连接
+**Characteristics:**
+- Event types: `session.start`, `user.message`, `assistant.message`, `tool.execution_start`
+- Structure: `{type, data: {...}, id, parentId}`
+- Tree relationship: Connected via `parentId`
 
-**示例:**
+**Example:**
 ```json
 {
   "type": "session.start",
@@ -126,12 +133,12 @@ if (claudeParser.canParse(events)) {
 
 ### 2. Claude Code Format
 
-**特征:**
-- 事件类型: `user`, `assistant`, `file-history-snapshot`, `queue-operation`
-- 结构: `{type, uuid, parentUuid, message: {...}}`
-- 树形关系: 通过 `parentUuid` 连接
+**Characteristics:**
+- Event types: `user`, `assistant`, `file-history-snapshot`, `queue-operation`
+- Structure: `{type, uuid, parentUuid, message: {...}}`
+- Tree relationship: Connected via `parentUuid`
 
-**示例:**
+**Example:**
 ```json
 {
   "type": "user",
@@ -145,18 +152,36 @@ if (claudeParser.canParse(events)) {
 }
 ```
 
-## 添加新格式
+### 3. Pi-Mono Format
 
-1. 继承 `BaseSessionParser`
-2. 实现所有必需方法
-3. 在 `ParserFactory` 中注册
+**Characteristics:**
+- Event types: `message` (with role), `model_change`, `thinking_change`
+- Structure: `{type, role, message, toolResult, timestamp}`
+- Flat structure with parentId linkage for tool results
+
+**Example:**
+```json
+{
+  "type": "message",
+  "role": "user",
+  "message": "...",
+  "timestamp": "...",
+  "id": "..."
+}
+```
+
+## Adding New Formats
+
+1. Extend `BaseSessionParser`
+2. Implement all required methods
+3. Register in `ParserFactory`
 
 ```javascript
 const BaseSessionParser = require('./base-parser');
 
 class MyCustomParser extends BaseSessionParser {
   canParse(events) {
-    // 检测逻辑
+    // Detection logic
     return events.some(e => e.customField);
   }
 
@@ -174,40 +199,40 @@ class MyCustomParser extends BaseSessionParser {
   extractToolCalls(events) { /* ... */ }
 }
 
-// 在 parser-factory.js 中添加
+// Add to parser-factory.js
 this.parsers.push(new MyCustomParser());
 ```
 
-## 测试
+## Testing
 
-运行示例:
+Run example:
 ```bash
 node examples/parser-usage.js
 ```
 
-## API 文档
+## API Documentation
 
 ### BaseSessionParser
 
-所有解析器的基类。
+Base class for all parsers.
 
-#### 方法
+#### Methods
 
-- `canParse(events)` - 判断是否能解析此格式
-- `parse(events)` - 解析事件并返回统一格式
-- `getMetadata(events)` - 提取 session 元数据
-- `extractTurns(events)` - 提取对话轮次
-- `extractToolCalls(events)` - 提取工具调用
+- `canParse(events)` - Check if this format can be parsed
+- `parse(events)` - Parse events and return unified format
+- `getMetadata(events)` - Extract session metadata
+- `extractTurns(events)` - Extract conversation turns
+- `extractToolCalls(events)` - Extract tool calls
 
 ### ParserFactory
 
-解析器工厂，自动检测格式。
+Parser factory for automatic format detection.
 
-#### 方法
+#### Methods
 
-- `getParser(events)` - 返回合适的解析器实例
-- `parse(events)` - 自动检测并解析
-- `getParserType(events)` - 返回解析器类型名称
+- `getParser(events)` - Return appropriate parser instance
+- `parse(events)` - Auto-detect and parse
+- `getParserType(events)` - Return parser type name
 
 ## License
 
