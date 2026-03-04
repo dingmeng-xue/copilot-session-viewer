@@ -1,5 +1,5 @@
 const SessionService = require('../services/sessionService');
-const { isValidSessionId } = require('../utils/helpers');
+const { isValidSessionId, buildMetadata } = require('../utils/helpers');
 const AdmZip = require('adm-zip');
 const path = require('path');
 const fs = require('fs');
@@ -34,19 +34,17 @@ class SessionController {
     try {
       const sessionId = req.params.id;
 
-      // Validate session ID format
       if (!isValidSessionId(sessionId)) {
         return res.status(400).json({ error: 'Invalid session ID' });
       }
 
-      const sessionData = await this.sessionService.getSessionWithEvents(sessionId);
-
-      if (!sessionData) {
+      const session = await this.sessionService.sessionRepository.findById(sessionId);
+      if (!session) {
         return res.status(404).json({ error: 'Session not found' });
       }
 
-      const { events, metadata } = sessionData;
-      res.render('session-vue', { sessionId, events, metadata });
+      const metadata = buildMetadata(session);
+      res.render('session-vue', { sessionId, events: [], metadata });
     } catch (err) {
       console.error('Error loading session:', err);
       res.status(500).json({ error: 'Error loading session' });
@@ -58,20 +56,17 @@ class SessionController {
     try {
       const sessionId = req.params.id;
 
-      // Validate session ID format
       if (!isValidSessionId(sessionId)) {
         return res.status(400).json({ error: 'Invalid session ID' });
       }
 
-      const sessionData = await this.sessionService.getSessionWithEvents(sessionId);
-
-      if (!sessionData) {
+      const session = await this.sessionService.sessionRepository.findById(sessionId);
+      if (!session) {
         return res.status(404).json({ error: 'Session not found' });
       }
 
-      const { events, metadata } = sessionData;
-      // Use original time-analyze view (supports all sources via normalized events)
-      res.render('time-analyze', { sessionId, events, metadata });
+      const metadata = buildMetadata(session);
+      res.render('time-analyze', { sessionId, events: [], metadata });
     } catch (err) {
       console.error('Error loading time analysis:', err);
       res.status(500).json({ error: 'Error loading analysis' });
