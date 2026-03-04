@@ -749,17 +749,30 @@ class SessionRepository {
     const sessionJson = first.v || first; // kind=0 wraps in .v
 
     // Merge kind=2 patches (response item arrays) into requests
-    // VSCode appends response items as kind=2 patches referencing the request index
-    for (let i = 1; i < lines.length; i++) {
+    // k = ['requests', N, 'response'] → target request index N
+    // i = null → append; i = number → splice insert at that index
+    for (let idx = 1; idx < lines.length; idx++) {
       try {
-        const patch = JSON.parse(lines[i]);
+        const patch = JSON.parse(lines[idx]);
         if (patch.kind === 2 && Array.isArray(patch.v)) {
-          // kind=2 v is an array of response items to append to the last/current request
           const requests = sessionJson.requests;
-          if (requests && requests.length > 0) {
-            const lastReq = requests[requests.length - 1];
-            if (!lastReq.response) lastReq.response = [];
-            lastReq.response.push(...patch.v);
+          if (!requests || requests.length === 0) continue;
+
+          // Determine target request index from k field
+          // k format: ['requests', <reqIndex>, 'response']
+          let reqIndex = requests.length - 1; // default: last request
+          if (Array.isArray(patch.k) && patch.k[0] === 'requests' && typeof patch.k[1] === 'number') {
+            reqIndex = patch.k[1];
+          }
+          const req = requests[reqIndex];
+          if (!req) continue;
+          if (!req.response) req.response = [];
+
+          const insertAt = patch.i; // null = append, number = splice insert
+          if (insertAt === null || insertAt === undefined) {
+            req.response.push(...patch.v);
+          } else {
+            req.response.splice(insertAt, 0, ...patch.v);
           }
         }
       } catch {
