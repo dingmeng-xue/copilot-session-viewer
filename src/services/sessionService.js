@@ -151,6 +151,19 @@ class SessionService {
         console.error('Error searching Pi-Mono sessions:', err);
         return [];
       }
+    } else if (session.source === 'vscode') {
+      // VSCode format: read JSON file directly, convert to event array via VsCodeParser
+      const { VsCodeParser } = require('../../lib/parsers');
+      const vscodeParser = new VsCodeParser();
+      try {
+        const raw = await fs.promises.readFile(session.filePath, 'utf-8');
+        const sessionJson = JSON.parse(raw);
+        const parsed = vscodeParser.parseVsCode(sessionJson);
+        return parsed.allEvents;
+      } catch (err) {
+        console.error('Error reading VSCode session:', err);
+        return [];
+      }
     }
 
 

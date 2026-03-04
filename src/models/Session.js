@@ -9,6 +9,7 @@ class Session {
     this.type = type; // 'directory' or 'file'
     this.source = options.source || 'copilot'; // 'copilot' or 'claude'
     this.directory = options.directory || null; // Full path to session directory
+    this.filePath = options.filePath || null; // Full path to session file (for file-based sessions)
     this.workspace = options.workspace || {};
     this.createdAt = options.createdAt;
     this.updatedAt = options.updatedAt;
@@ -124,7 +125,8 @@ class Session {
     const metadata = {
       'copilot': { name: 'Copilot', badgeClass: 'source-copilot' },
       'claude': { name: 'Claude', badgeClass: 'source-claude' },
-      'pi-mono': { name: 'Pi', badgeClass: 'source-pi-mono' }
+      'pi-mono': { name: 'Pi', badgeClass: 'source-pi-mono' },
+      'vscode': { name: 'VSCode', badgeClass: 'source-vscode' }
     };
     return metadata[source] || { name: source, badgeClass: 'source-unknown' };
   }

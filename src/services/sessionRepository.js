@@ -3,7 +3,7 @@ const path = require('path');
 const os = require('os');
 const Session = require('../models/Session');
 const { fileExists, countLines, parseYAML, getSessionMetadataOptimized, shouldSkipEntry } = require('../utils/fileUtils');
-const { ParserFactory } = require('../../lib/parsers');
+const { ParserFactory, VsCodeParser } = require('../../lib/parsers');
 
 /**
  * Session Repository - Data access layer for sessions
@@ -38,6 +38,11 @@ class SessionRepository {
           type: 'pi-mono',
           dir: process.env.PI_MONO_SESSION_DIR || 
                path.join(os.homedir(), '.pi', 'agent', 'sessions')
+        },
+        {
+          type: 'vscode',
+          dir: process.env.VSCODE_WORKSPACE_STORAGE_DIR ||
+               path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage')
         }
       ];
     }
@@ -99,6 +104,12 @@ class SessionRepository {
           // Pi-Mono: project directories containing timestamped .jsonl files
           if (stats.isDirectory()) {
             return this._scanPiMonoDir(fullPath, entry);
+          }
+        } else if (source.type === 'vscode') {
+          // VSCode: workspaceStorage/<hash>/chatSessions/<uuid>.json
+          // Each top-level entry is a workspace hash directory
+          if (stats.isDirectory()) {
+            return this._scanVsCodeWorkspaceDir(fullPath);
           }
         }
         return null;
@@ -259,6 +270,8 @@ class SessionRepository {
         session = await this._findClaudeSession(sessionId, source.dir);
       } else if (source.type === 'pi-mono') {
         session = await this._findPiMonoSession(sessionId, source.dir);
+      } else if (source.type === 'vscode') {
+        session = await this._findVsCodeSession(sessionId, source.dir);
       }
 
       if (session) return session;
@@ -420,6 +433,59 @@ class SessionRepository {
       console.error(`Error searching Pi-Mono sessions: ${err.message}`);
     }
     
+    return null;
+  }
+
+  /**
+   * Find VSCode session by ID in workspaceStorage
+   * @private
+   */
+  async _findVsCodeSession(sessionId, workspaceStorageDir) {
+    try {
+      const hashes = await fs.readdir(workspaceStorageDir);
+      for (const hash of hashes) {
+        const chatSessionsDir = path.join(workspaceStorageDir, hash, 'chatSessions');
+        try {
+          const files = await fs.readdir(chatSessionsDir);
+          const matchingFile = files.find(f => f === `${sessionId}.json` || f.replace('.json', '') === sessionId);
+          if (matchingFile) {
+            const fullPath = path.join(chatSessionsDir, matchingFile);
+            const stats = await fs.stat(fullPath);
+            const raw = await fs.readFile(fullPath, 'utf-8');
+            const sessionJson = JSON.parse(raw);
+            const requests = sessionJson.requests || [];
+            if (requests.length === 0) return null;
+
+            const firstReq = requests[0];
+            const createdAt = sessionJson.creationDate
+              ? new Date(sessionJson.creationDate)
+              : (firstReq.timestamp ? new Date(firstReq.timestamp) : stats.birthtime);
+            const updatedAt = sessionJson.lastMessageDate
+              ? new Date(sessionJson.lastMessageDate)
+              : stats.mtime;
+            const userText = this._extractVsCodeUserText(firstReq.message);
+
+            return new Session(sessionId, 'file', {
+              source: 'vscode',
+              filePath: fullPath,
+              createdAt,
+              updatedAt,
+              summary: userText ? userText.slice(0, 120) : `VSCode chat (${requests.length} requests)`,
+              hasEvents: true,
+              eventCount: requests.length,
+              duration: updatedAt - createdAt,
+              sessionStatus: 'completed',
+              model: firstReq.modelId || null,
+              workspace: { cwd: path.join(workspaceStorageDir, hash) },
+            });
+          }
+        } catch {
+          // No chatSessions dir or can't read — skip
+        }
+      }
+    } catch (err) {
+      console.error(`Error searching VSCode sessions: ${err.message}`);
+    }
     return null;
   }
 
@@ -655,6 +721,91 @@ class SessionRepository {
       console.error(`[PI-MONO] Error scanning dir ${projectDir}:`, err.message);
       return [];
     }
+  }
+
+  /**
+   * Scan a VSCode workspaceStorage/<hash> directory for chatSessions/*.json files
+   * @private
+   */
+  async _scanVsCodeWorkspaceDir(workspaceHashDir) {
+    const chatSessionsDir = path.join(workspaceHashDir, 'chatSessions');
+    try {
+      await fs.access(chatSessionsDir);
+    } catch {
+      return []; // No chatSessions subfolder — skip silently
+    }
+
+    const entries = await fs.readdir(chatSessionsDir);
+    const jsonFiles = entries.filter(e => e.endsWith('.json') && !shouldSkipEntry(e));
+    if (jsonFiles.length === 0) return [];
+
+    const sessions = [];
+    for (const file of jsonFiles) {
+      const fullPath = path.join(chatSessionsDir, file);
+      try {
+        const stats = await fs.stat(fullPath);
+        const raw = await fs.readFile(fullPath, 'utf-8');
+        const sessionJson = JSON.parse(raw);
+
+        const sessionId = sessionJson.sessionId || path.basename(file, '.json');
+        const requests = sessionJson.requests || [];
+        if (requests.length === 0) continue;
+
+        const firstReq = requests[0];
+        const lastReq = requests[requests.length - 1];
+        const createdAt = sessionJson.creationDate
+          ? new Date(sessionJson.creationDate)
+          : (firstReq.timestamp ? new Date(firstReq.timestamp) : stats.birthtime);
+        const updatedAt = sessionJson.lastMessageDate
+          ? new Date(sessionJson.lastMessageDate)
+          : (lastReq.timestamp ? new Date(lastReq.timestamp) : stats.mtime);
+
+        // Count tool invocations across all requests
+        let toolCount = 0;
+        for (const req of requests) {
+          toolCount += (req.response || []).filter(r => r.kind === 'toolInvocationSerialized').length;
+        }
+
+        const model = firstReq.modelId || null;
+        const agentId = firstReq.agent?.id || 'vscode-copilot';
+        const userText = this._extractVsCodeUserText(firstReq.message);
+
+        const session = new Session(
+          sessionId,
+          'file',
+          {
+            source: 'vscode',
+            filePath: fullPath,
+            createdAt,
+            updatedAt,
+            summary: userText ? userText.slice(0, 120) : `VSCode chat (${requests.length} requests)`,
+            hasEvents: true,
+            eventCount: requests.length,
+            duration: updatedAt - createdAt,
+            sessionStatus: 'completed',
+            model,
+            agentId,
+            toolCount,
+            workspace: { cwd: workspaceHashDir },
+          }
+        );
+
+        sessions.push(session);
+      } catch (err) {
+        // Skip malformed files silently
+      }
+    }
+    return sessions;
+  }
+
+  /** Extract plain text from a VSCode message object */
+  _extractVsCodeUserText(message) {
+    if (!message) return '';
+    if (typeof message.text === 'string') return message.text;
+    if (Array.isArray(message.parts)) {
+      return message.parts.filter(p => p.kind === 'text').map(p => p.text || '').join('');
+    }
+    return '';
   }
 
   /**
