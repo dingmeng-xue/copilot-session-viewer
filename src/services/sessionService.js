@@ -165,7 +165,9 @@ class SessionService {
         }
         if (!sessionJson) return [];
         const parsed = vscodeParser.parseVsCode(sessionJson);
-        return parsed.allEvents;
+        // Convert tool.invocation events → assistant.message with data.tools
+        // so frontend can render them using the same tool-list component
+        return this._expandVsCodeEvents(parsed.allEvents);
       } catch (err) {
         console.error('Error reading VSCode session:', err);
         return [];
@@ -1453,6 +1455,54 @@ class SessionService {
   /**
    * Expand Copilot format (user/assistant) to timeline format with turn_start/complete
    * @private
+   /**
+   * Convert VSCode tool.invocation events into assistant.message events with data.tools,
+   * so they render using the same frontend tool-list component.
+   * Groups consecutive tool.invocation events under a single assistant.message when possible.
+   */
+  _expandVsCodeEvents(events) {
+    const result = [];
+    let pendingTools = [];
+    let pendingParentId = null;
+    let pendingTs = null;
+    let pendingIdx = 0;
+
+    const flushTools = () => {
+      if (pendingTools.length === 0) return;
+      result.push({
+        type: 'assistant.message',
+        id: `vscode-tools-${pendingIdx}`,
+        timestamp: pendingTs,
+        parentId: pendingParentId,
+        data: {
+          message: '',
+          content: '',
+          tools: pendingTools,
+        },
+        _synthetic: true,
+      });
+      pendingTools = [];
+    };
+
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      if (ev.type === 'tool.invocation') {
+        if (pendingTools.length === 0) {
+          pendingParentId = ev.parentId;
+          pendingTs = ev.timestamp;
+          pendingIdx = i;
+        }
+        if (ev.data?.tool) pendingTools.push(ev.data.tool);
+      } else {
+        flushTools();
+        result.push(ev);
+      }
+    }
+    flushTools();
+    return result;
+  }
+
+  /**
    * @param {Array} events - Normalized Copilot events
    * @returns {Array} Expanded events with turn_start/complete
    */
