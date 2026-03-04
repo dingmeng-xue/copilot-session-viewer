@@ -1014,9 +1014,6 @@
         
         // Async loading state
         const loadedEvents = ref([]);
-        const eventsTotal = ref(0);
-        const eventsLoadingMore = ref(false);
-        const EVENTS_PAGE_SIZE = 200;
         const eventsLoading = ref(true);
         const eventsError = ref(null);
         
@@ -1835,47 +1832,29 @@
         
 
         // Lifecycle
-        // Load more events when scrolled near bottom
-        const loadMoreEvents = async () => {
-          if (eventsLoadingMore.value) return;
-          if (loadedEvents.value.length >= eventsTotal.value) return;
-          eventsLoadingMore.value = true;
-          try {
-            const offset = loadedEvents.value.length;
-            const response = await fetch(`/api/sessions/${sessionId.value}/events?limit=${EVENTS_PAGE_SIZE}&offset=${offset}`);
-            if (!response.ok) return;
-            const data = await response.json();
-            const newEvents = Array.isArray(data) ? data : (data.events || []);
-            loadedEvents.value = [...loadedEvents.value, ...newEvents];
-            console.log('[Pagination] Loaded more:', newEvents.length, '| Total loaded:', loadedEvents.value.length, '/', eventsTotal.value);
-          } finally {
-            eventsLoadingMore.value = false;
-          }
-        };
-
         onMounted(async () => {
-          // Load first batch of events
+          // Load events asynchronously
           try {
             console.log('[Navigation] Starting event loading...');
-            const response = await fetch(`/api/sessions/${sessionId.value}/events?limit=${EVENTS_PAGE_SIZE}&offset=0`);
+            const response = await fetch(`/api/sessions/${sessionId.value}/events`);
             if (!response.ok) {
               throw new Error(`Failed to load events: ${response.statusText}`);
             }
             const data = await response.json();
             
+            // Handle both old (array) and new (object with pagination) response formats
             if (Array.isArray(data)) {
-              // Old format: direct array (no pagination info — load all at once)
+              // Old format: direct array
               loadedEvents.value = data;
-              eventsTotal.value = data.length;
             } else if (data.events && Array.isArray(data.events)) {
+              // New format: { events, pagination }
               loadedEvents.value = data.events;
-              eventsTotal.value = data.pagination?.total ?? data.events.length;
               console.log('[Navigation] Pagination:', data.pagination);
             } else {
               throw new Error('Invalid response format');
             }
             
-            console.log('[Navigation] Events loaded:', loadedEvents.value.length, '/', eventsTotal.value);
+            console.log('[Navigation] Events loaded:', loadedEvents.value.length);
             
             // Check for URL query parameters and jump to event AFTER events are loaded
             const urlParams = new URLSearchParams(window.location.search);
@@ -2016,18 +1995,9 @@
             const scroller = document.querySelector('.vue-recycle-scroller');
             if (scroller) {
               scroller.addEventListener('scroll', updateVisibleRange);
-              // Infinite scroll: load more when near bottom
-              const handleInfiniteScroll = () => {
-                const { scrollTop, scrollHeight, clientHeight } = scroller;
-                if (scrollHeight - scrollTop - clientHeight < 400) {
-                  loadMoreEvents();
-                }
-              };
-              scroller.addEventListener('scroll', handleInfiniteScroll);
               // Store cleanup function
               scrollCleanup = () => {
                 scroller.removeEventListener('scroll', updateVisibleRange);
-                scroller.removeEventListener('scroll', handleInfiniteScroll);
               };
             }
           }, 500);
@@ -2068,8 +2038,6 @@
           scrollerRef,
           visibleRange,
           loadedEvents,
-          eventsTotal,
-          eventsLoadingMore,
           eventsLoading,
           eventsError,
           flatEvents,
@@ -2473,9 +2441,6 @@
                   </DynamicScrollerItem>
                 </template>
               </DynamicScroller>
-              <!-- Infinite scroll loading indicator -->
-              <div v-if="eventsLoadingMore" style="text-align:center;padding:12px;color:#888;font-size:13px;">⏳ Loading more events...</div>
-              <div v-else-if="loadedEvents.length < eventsTotal" style="text-align:center;padding:12px;color:#888;font-size:12px;">{{ loadedEvents.length }} / {{ eventsTotal }} events loaded — scroll down for more</div>
             </div>
           </div>
           
