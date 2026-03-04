@@ -122,12 +122,11 @@ class SessionController {
     }
   }
 
-  // API: Load more sessions for infinite scroll
+    // API: Load more sessions for infinite scroll
   async loadMoreSessions(req, res) {
     try {
       const offset = parseInt(req.query.offset) || 0;
       const limit = parseInt(req.query.limit) || 20;
-      const sourceFilter = req.query.source || null;
 
       // Validate parameters
       if (offset < 0 || limit < 1 || limit > 50) {
@@ -136,7 +135,7 @@ class SessionController {
 
       // Calculate page number from offset
       const page = Math.floor(offset / limit) + 1;
-      const paginationData = await this.sessionService.getPaginatedSessions(page, limit, sourceFilter);
+      const paginationData = await this.sessionService.getPaginatedSessions(page, limit);
 
       res.json({
         sessions: paginationData.sessions,
