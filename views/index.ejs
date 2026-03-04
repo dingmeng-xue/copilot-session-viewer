@@ -863,9 +863,8 @@
             sourceState[currentSourceFilter] = { offset: 0, hasMore: true };
           }
 
-          // Fetch first batch if none loaded for this source yet
-          const hasSourceSessions = allSessions.some(s => s.source === currentSourceFilter);
-          if (!hasSourceSessions && !isLoading) {
+          // Always fetch first batch when switching to a new source (backend-filtered)
+          if (sourceState[currentSourceFilter].offset === 0 && !isLoading) {
             isLoading = true;
             try {
               const resp = await fetch(`/api/sessions/load-more?offset=0&limit=20&source=${encodeURIComponent(currentSourceFilter)}`);
