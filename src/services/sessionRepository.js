@@ -732,6 +732,43 @@ class SessionRepository {
    * Scan a VSCode workspaceStorage/<hash> directory for chatSessions/*.json files
    * @private
    */
+  /** Resolve the real project/workspace path from a VSCode workspaceStorage hash directory */
+  async _resolveVsCodeWorkspacePath(workspaceHashDir) {
+    try {
+      const workspaceJsonPath = path.join(workspaceHashDir, 'workspace.json');
+      const raw = await fs.readFile(workspaceJsonPath, 'utf-8');
+      const meta = JSON.parse(raw);
+
+      if (meta.folder) {
+        // Single-folder workspace: file:///path/to/project
+        return decodeURIComponent(meta.folder.replace('file://', ''));
+      }
+
+      if (meta.workspace) {
+        // Multi-folder workspace: points to another .json with folders array
+        const wsFilePath = decodeURIComponent(meta.workspace.replace('file://', ''));
+        try {
+          const wsRaw = await fs.readFile(wsFilePath, 'utf-8');
+          const ws = JSON.parse(wsRaw);
+          if (Array.isArray(ws.folders) && ws.folders.length > 0) {
+            // Return all folder names joined, relative to workspace file dir
+            const wsDir = path.dirname(wsFilePath);
+            const folders = ws.folders.map(f => {
+              const resolved = path.resolve(wsDir, f.path);
+              return path.basename(resolved);
+            });
+            return folders.join(', ');
+          }
+        } catch {
+          // Ignore nested read errors
+        }
+      }
+    } catch {
+      // No workspace.json or unreadable
+    }
+    return null;
+  }
+
   async _scanVsCodeWorkspaceDir(workspaceHashDir) {
     const chatSessionsDir = path.join(workspaceHashDir, 'chatSessions');
     try {
@@ -739,6 +776,9 @@ class SessionRepository {
     } catch {
       return []; // No chatSessions subfolder — skip silently
     }
+
+    // Resolve the real project path from workspace.json
+    const realWorkspacePath = await this._resolveVsCodeWorkspacePath(workspaceHashDir);
 
     const entries = await fs.readdir(chatSessionsDir);
     const jsonFiles = entries.filter(e => (e.endsWith('.json') || e.endsWith('.jsonl')) && !shouldSkipEntry(e));
@@ -800,7 +840,7 @@ class SessionRepository {
             model,
             agentId,
             toolCount,
-            workspace: { cwd: workspaceHashDir },
+            workspace: { cwd: realWorkspacePath || workspaceHashDir },
           }
         );
 
