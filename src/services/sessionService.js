@@ -500,6 +500,17 @@ class SessionService {
       }
     });
     
+    // Mark user events that are entirely tool_result responses (will be filtered out in normalizer)
+    events.forEach(event => {
+      if (event.type === 'user' && Array.isArray(event.message?.content)) {
+        const allToolResults = event.message.content.length > 0 &&
+          event.message.content.every(block => block?.type === 'tool_result');
+        if (allToolResults) {
+          event._isToolResultWrapper = true;
+        }
+      }
+    });
+
     // Match tool_use with tool_result
     events.forEach(event => {
       if (event.data?.tools) {
@@ -523,9 +534,15 @@ class SessionService {
         });
         
         // Bug fix: Only remove tool_result from assistant messages
-        // User messages naturally contain tool_result (responses to tool_use), keep them
+        // Mark user messages that consist entirely of tool_results as wrappers (will be filtered out)
         if (event.type === 'assistant' || event.type === 'assistant.message') {
           event.data.tools = event.data.tools.filter(tool => tool.type !== 'tool_result');
+        } else if (event.type === 'user' || event.type === 'user.message') {
+          const allToolResults = event.data.tools.length > 0 &&
+            event.data.tools.every(tool => tool.type === 'tool_result');
+          if (allToolResults) {
+            event._isToolResultWrapper = true;
+          }
         }
       }
     });

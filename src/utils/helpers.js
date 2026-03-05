@@ -8,9 +8,12 @@
  * @returns {Object} Metadata object
  */
 function buildMetadata(session) {
+  const json = session.toJSON ? session.toJSON() : {};
   return {
     type: session.type,
     source: session.source, // 'copilot' or 'claude'
+    sourceName: json.sourceName || session.source,
+    sourceBadgeClass: json.sourceBadgeClass || 'source-unknown',
     summary: session.summary,
     model: session.model,
     repo: session.workspace?.repository,
