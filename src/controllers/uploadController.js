@@ -10,7 +10,7 @@ const config = require('../config');
 class UploadController {
   constructor() {
     this.SESSION_DIR = process.env.SESSION_DIR || path.join(os.homedir(), '.copilot', 'session-state');
-    this.uploadDir = path.join(os.tmpdir(), 'copilot-session-uploads');
+    this.uploadDir = process.env.UPLOAD_DIR || path.join(os.tmpdir(), 'copilot-session-uploads');
 
     // Multi-format session directories
     this.SESSION_DIRS = {

@@ -146,13 +146,11 @@ describe('UploadController', () => {
     // Create temporary session directory
     tmpSessionDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'upload-test-'));
     process.env.SESSION_DIR = tmpSessionDir;
+    process.env.UPLOAD_DIR = path.join(tmpSessionDir, 'uploads');
 
     controller = new UploadController();
 
     // Ensure upload directory exists and is clean
-    if (fs.existsSync(controller.uploadDir)) {
-      await fs.promises.rm(controller.uploadDir, { recursive: true, force: true }).catch(() => {});
-    }
     await fs.promises.mkdir(controller.uploadDir, { recursive: true });
 
     // Mock processManager
@@ -164,18 +162,16 @@ describe('UploadController', () => {
     if (consoleErrorSpy) {
       consoleErrorSpy.mockRestore();
     }
-    // Cleanup - ignore errors if directory doesn't exist or has issues
+    // Cleanup - tmpSessionDir includes uploads subdir, so one rm suffices
     await fs.promises.rm(tmpSessionDir, { recursive: true, force: true }).catch(() => {});
-    if (fs.existsSync(controller.uploadDir)) {
-      await fs.promises.rm(controller.uploadDir, { recursive: true, force: true }).catch(() => {});
-    }
     delete process.env.SESSION_DIR;
+    delete process.env.UPLOAD_DIR;
   });
 
   describe('constructor and initialization', () => {
     it('should initialize with correct directories', () => {
       expect(controller.SESSION_DIR).toBe(tmpSessionDir);
-      expect(controller.uploadDir).toBe(path.join(os.tmpdir(), 'copilot-session-uploads'));
+      expect(controller.uploadDir).toBe(process.env.UPLOAD_DIR);
     });
 
     it('should create multer instance with correct configuration', () => {
@@ -808,8 +804,6 @@ describe('UploadController', () => {
     it('should reject session that already exists', async () => {
       const sessionId = 'existing-session-id';
       const zipPath = path.join(controller.uploadDir, 'test.zip');
-      // Ensure directory exists (defense against CI race conditions)
-      await fs.promises.mkdir(path.dirname(zipPath), { recursive: true });
       await fs.promises.writeFile(zipPath, 'dummy');
 
       const req = { file: { path: zipPath } };

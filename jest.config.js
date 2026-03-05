@@ -11,5 +11,6 @@ module.exports = {
     '**/__tests__/**/*.test.js',
     '**/*.test.js'
   ],
-  verbose: true
+  verbose: true,
+  maxWorkers: 4
 };
