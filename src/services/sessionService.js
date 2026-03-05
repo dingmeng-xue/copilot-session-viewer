@@ -151,27 +151,24 @@ class SessionService {
         console.error('Error searching Pi-Mono sessions:', err);
         return [];
       }
-    } else if (session.source === 'vscode') {
-      // VSCode format: read JSON file directly, convert to event array via VsCodeParser
-      const { VsCodeParser } = require('../../lib/parsers');
-      const vscodeParser = new VsCodeParser();
-      try {
-        const raw = await fs.promises.readFile(session.filePath, 'utf-8');
-        let sessionJson;
-        if (session.filePath.endsWith('.jsonl')) {
-          sessionJson = this.sessionRepository._parseVsCodeJsonl(raw);
-        } else {
-          sessionJson = JSON.parse(raw);
-        }
-        if (!sessionJson) return [];
-        const parsed = vscodeParser.parseVsCode(sessionJson);
-        // Convert tool.invocation events → assistant.message with data.tools
-        // so frontend can render them using the same tool-list component
-        return this._expandVsCodeEvents(parsed.allEvents);
-      } catch (err) {
-        console.error('Error reading VSCode session:', err);
-        return [];
-      }
+    // } else if (session.source === 'vscode') { // TODO: VSCode disabled
+    //   const { VsCodeParser } = require('../../lib/parsers');
+    //   const vscodeParser = new VsCodeParser();
+    //   try {
+    //     const raw = await fs.promises.readFile(session.filePath, 'utf-8');
+    //     let sessionJson;
+    //     if (session.filePath.endsWith('.jsonl')) {
+    //       sessionJson = this.sessionRepository._parseVsCodeJsonl(raw);
+    //     } else {
+    //       sessionJson = JSON.parse(raw);
+    //     }
+    //     if (!sessionJson) return [];
+    //     const parsed = vscodeParser.parseVsCode(sessionJson);
+    //     return this._expandVsCodeEvents(parsed.allEvents);
+    //   } catch (err) {
+    //     console.error('Error reading VSCode session:', err);
+    //     return [];
+    //   }
     }
 
 

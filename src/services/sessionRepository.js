@@ -39,11 +39,12 @@ class SessionRepository {
           dir: process.env.PI_MONO_SESSION_DIR || 
                path.join(os.homedir(), '.pi', 'agent', 'sessions')
         },
-        {
-          type: 'vscode',
-          dir: process.env.VSCODE_WORKSPACE_STORAGE_DIR ||
-               path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage')
-        }
+        // TODO: VSCode parser disabled
+        // {
+        //   type: 'vscode',
+        //   dir: process.env.VSCODE_WORKSPACE_STORAGE_DIR ||
+        //        path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage')
+        // }
       ];
     }
     
@@ -110,12 +111,10 @@ class SessionRepository {
           if (stats.isDirectory()) {
             return this._scanPiMonoDir(fullPath, entry);
           }
-        } else if (source.type === 'vscode') {
-          // VSCode: workspaceStorage/<hash>/chatSessions/<uuid>.json
-          // Each top-level entry is a workspace hash directory
-          if (stats.isDirectory()) {
-            return this._scanVsCodeWorkspaceDir(fullPath);
-          }
+        // } else if (source.type === 'vscode') { // TODO: VSCode disabled
+        //   if (stats.isDirectory()) {
+        //     return this._scanVsCodeWorkspaceDir(fullPath);
+        //   }
         }
         return null;
       });
@@ -275,8 +274,8 @@ class SessionRepository {
         session = await this._findClaudeSession(sessionId, source.dir);
       } else if (source.type === 'pi-mono') {
         session = await this._findPiMonoSession(sessionId, source.dir);
-      } else if (source.type === 'vscode') {
-        session = await this._findVsCodeSession(sessionId, source.dir);
+      // } else if (source.type === 'vscode') { // TODO: VSCode disabled
+      //   session = await this._findVsCodeSession(sessionId, source.dir);
       }
 
       if (session) return session;
