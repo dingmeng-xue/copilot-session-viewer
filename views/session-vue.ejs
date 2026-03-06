@@ -2687,8 +2687,11 @@
                       <div class="turn-divider-line-left"></div>
                       <span class="turn-divider-text">
                         UserReq {{ getTurnNumber(item.virtualIndex) }}
-                        <span class="turn-time">{{ formatTime(item.timestamp) }}</span>
-                        <span v-if="getTurnDuration(item.virtualIndex)" class="turn-duration">{{ getTurnDuration(item.virtualIndex) }}</span>
+                        <template v-if="metadata.source === 'vscode'">
+                          <span class="turn-time">{{ formatTime(item.timestamp) }}</span>
+                          <span v-if="getTurnDuration(item.virtualIndex)" class="turn-duration">{{ getTurnDuration(item.virtualIndex) }}</span>
+                        </template>
+                        <template v-else>Start</template>
                       </span>
                       <div class="turn-divider-line-right"></div>
                       <div class="divider-separator"></div>
