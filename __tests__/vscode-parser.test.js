@@ -306,13 +306,16 @@ describe('VsCodeParser', () => {
 
       const parsed = parser.parseJsonl(lines);
 
-      // Check that subagent.started events are created
+      // VS Code source does not emit subagent.started/completed events.
+      // Instead, subagent identity is surfaced via subAgentName on tool.invocation events.
       const subagentEvents = parsed.allEvents.filter(e => e.type === 'subagent.started');
-      expect(subagentEvents.length).toBeGreaterThan(0);
+      expect(subagentEvents.length).toBe(0);
 
-      // Check that tool invocation events are created
+      // runSubagent calls should appear as tool.invocation with subAgentName
       const toolEvents = parsed.allEvents.filter(e => e.type === 'tool.invocation');
       expect(toolEvents.length).toBeGreaterThanOrEqual(2);
+      const subagentTools = toolEvents.filter(e => e.data?.subAgentName);
+      expect(subagentTools.length).toBeGreaterThan(0);
     });
   });
 });

@@ -151,24 +151,39 @@ class SessionService {
         console.error('Error searching Pi-Mono sessions:', err);
         return [];
       }
-    // } else if (session.source === 'vscode') { // TODO: VSCode disabled
-    //   const { VsCodeParser } = require('../../lib/parsers');
-    //   const vscodeParser = new VsCodeParser();
-    //   try {
-    //     const raw = await fs.promises.readFile(session.filePath, 'utf-8');
-    //     let sessionJson;
-    //     if (session.filePath.endsWith('.jsonl')) {
-    //       sessionJson = this.sessionRepository._parseVsCodeJsonl(raw);
-    //     } else {
-    //       sessionJson = JSON.parse(raw);
-    //     }
-    //     if (!sessionJson) return [];
-    //     const parsed = vscodeParser.parseVsCode(sessionJson);
-    //     return this._expandVsCodeEvents(parsed.allEvents);
-    //   } catch (err) {
-    //     console.error('Error reading VSCode session:', err);
-    //     return [];
-    //   }
+    } else if (session.source === 'vscode') {
+      // VSCode format: Read JSONL file and parse with VsCodeParser
+      const { VsCodeParser } = require('../../lib/parsers');
+      const vscodeParser = new VsCodeParser();
+      try {
+        const raw = await fs.promises.readFile(session.filePath, 'utf-8');
+        const lines = raw.trim().split('\n').filter(line => line.trim());
+        const parsedLines = lines.map(line => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            return null;
+          }
+        }).filter(l => l !== null);
+
+        if (parsedLines.length === 0) return [];
+
+        // Use parseJsonl for new JSONL format, or parseVsCode for old JSON format
+        let parsed;
+        if (vscodeParser.canParse(parsedLines)) {
+          // New JSONL format
+          parsed = vscodeParser.parseJsonl(parsedLines);
+        } else {
+          // Old JSON format (single object)
+          const sessionJson = JSON.parse(raw);
+          parsed = vscodeParser.parseVsCode(sessionJson);
+        }
+
+        return this._expandVsCodeEvents(parsed.allEvents);
+      } catch (err) {
+        console.error('Error reading VSCode session:', err);
+        return [];
+      }
     }
 
 
@@ -1480,6 +1495,8 @@ class SessionService {
     let pendingParentId = null;
     let pendingTs = null;
     let pendingIdx = 0;
+    let pendingSubAgentId = null;
+    let pendingSubAgentName = null;
 
     const flushTools = () => {
       if (pendingTools.length === 0) return;
@@ -1492,19 +1509,30 @@ class SessionService {
           message: '',
           content: '',
           tools: pendingTools,
+          subAgentId: pendingSubAgentId,
+          subAgentName: pendingSubAgentName,
         },
         _synthetic: true,
       });
       pendingTools = [];
+      pendingSubAgentId = null;
+      pendingSubAgentName = null;
     };
 
     for (let i = 0; i < events.length; i++) {
       const ev = events[i];
       if (ev.type === 'tool.invocation') {
+        const evSubAgentId = ev.data?.subAgentId || null;
+        // Flush if switching to a different subagent's tool group
+        if (pendingTools.length > 0 && evSubAgentId !== pendingSubAgentId) {
+          flushTools();
+        }
         if (pendingTools.length === 0) {
           pendingParentId = ev.parentId;
           pendingTs = ev.timestamp;
           pendingIdx = i;
+          pendingSubAgentId = evSubAgentId;
+          pendingSubAgentName = ev.data?.subAgentName || null;
         }
         if (ev.data?.tool) pendingTools.push(ev.data.tool);
       } else {
