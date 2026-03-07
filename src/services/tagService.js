@@ -56,10 +56,17 @@ class TagService {
    * @returns {string} Path to tags.json
    */
   getSessionTagsFilePath(session) {
-    if (!session.directory) {
-      throw new Error('Session must have a directory field');
+    if (session.directory) {
+      return path.join(session.directory, 'tags.json');
     }
-    return path.join(session.directory, 'tags.json');
+    // File-based sessions (e.g. Claude .jsonl): store tags alongside the file
+    if (session.filePath) {
+      const dir = path.dirname(session.filePath);
+      const base = path.basename(session.filePath, path.extname(session.filePath));
+      return path.join(dir, `${base}.tags.json`);
+    }
+    // Fallback: store in central location by session id
+    return path.join(this.knownTagsDir, 'session-tags', `${session.id}.tags.json`);
   }
 
   /**
@@ -130,6 +137,8 @@ class TagService {
         // File doesn't exist, ignore
       }
     } else {
+      // Ensure directory exists for tags file
+      await fs.mkdir(path.dirname(tagsFilePath), { recursive: true });
       // Write tags to session directory
       await fs.writeFile(tagsFilePath, JSON.stringify(normalizedTags, null, 2), 'utf8');
 

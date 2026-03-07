@@ -439,7 +439,7 @@ describe('TagController API', () => {
       expect(response.body).toEqual({ error: 'Error saving session tags' });
     });
 
-    it('should return 400 when session lacks directory field', async () => {
+    it('should handle session without directory field by using fallback path', async () => {
       const sessionId = await createTestSession('test-session-no-dir');
 
       // Mock sessionRepository to return a session without directory
@@ -448,9 +448,9 @@ describe('TagController API', () => {
       const response = await request(app)
         .put(`/api/sessions/${sessionId}/tags`)
         .send({ tags: ['bug'] })
-        .expect(400);
+        .expect(200);
 
-      expect(response.body).toEqual({ error: 'Session does not support tagging' });
+      expect(response.body.tags).toEqual(['bug']);
     });
   });
 

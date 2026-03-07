@@ -77,11 +77,11 @@ describe('TagService', () => {
       expect(tags).toEqual([]);
     });
 
-    it('should throw error when session has no directory field', async () => {
+    it('should fallback to central location when session has no directory or filePath', async () => {
       const session = { id: 'test-session' };
 
-      await expect(tagService.getSessionTags(session))
-        .rejects.toThrow('Session must have a directory field');
+      const tags = await tagService.getSessionTags(session);
+      expect(tags).toEqual([]);
     });
   });
 
