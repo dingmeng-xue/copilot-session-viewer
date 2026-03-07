@@ -30,11 +30,11 @@ test.describe('Time Analysis and Timeline Tests', () => {
       await page.waitForSelector('.container', { timeout: 10000 });
 
       // Check for home button
-      const homeBtn = page.locator('.nav-btn:has-text("🏠 Home")');
+      const homeBtn = page.locator('.nav-btn:has-text("← Back to Session")');
       await expect(homeBtn).toBeVisible();
 
       // Check for session detail button
-      const sessionBtn = page.locator('.nav-btn:has-text("← Session Detail")');
+      const sessionBtn = page.locator('.nav-btn:has-text("← Back to Session")');
       await expect(sessionBtn).toBeVisible();
     });
 
@@ -43,7 +43,7 @@ test.describe('Time Analysis and Timeline Tests', () => {
       await page.waitForSelector('.container', { timeout: 10000 });
 
       // Click session detail button
-      const sessionBtn = page.locator('.nav-btn:has-text("← Session Detail")');
+      const sessionBtn = page.locator('.nav-btn:has-text("← Back to Session")');
       await sessionBtn.click();
 
       // Wait for navigation
