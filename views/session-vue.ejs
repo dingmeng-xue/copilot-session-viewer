@@ -907,11 +907,12 @@
       font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
       cursor: pointer;
       user-select: none;
-      line-height: 1;
+      line-height: 1.4;
       display: flex;
-      align-items: center;
+      align-items: baseline;
       gap: 0;
       padding: 2px 0;
+      flex-wrap: wrap;
     }
     .tool-header-line:hover {
       color: #c9d1d9;
@@ -1787,8 +1788,8 @@
                       args.path || args.file_path || args.query || '';
           }
           
-          if (command && command.length > 100) {
-            command = command.substring(0, 100) + '...';
+          if (command && command.length > 200) {
+            command = command.substring(0, 200) + '...';
           }
           
           return command;
