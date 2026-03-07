@@ -72,6 +72,7 @@ class Session {
    */
   static fromFile(filePath, id, stats, eventCount, summary, duration, copilotVersion, selectedModel, sessionStatus) {
     return new Session(id, 'file', {
+      filePath: filePath,
       directory: path.dirname(filePath), // Directory containing the file
       createdAt: stats.birthtime,
       updatedAt: stats.mtime,
