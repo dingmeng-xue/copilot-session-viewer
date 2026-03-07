@@ -482,7 +482,7 @@ describe('SessionRepository - Additional Coverage', () => {
 
       const status = repository._computeSessionStatus({
         hasSessionEnd: false,
-        lastEventTime: Date.now() - 10 * 60 * 1000 // 10 minutes ago
+        lastEventTime: Date.now() - 20 * 60 * 1000 // 20 minutes ago
       });
 
       expect(status).toBe('completed');

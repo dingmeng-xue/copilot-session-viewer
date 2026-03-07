@@ -118,7 +118,23 @@ class SessionRepository {
       }
     }
 
-    return this._sortByUpdatedAt(allSessions);
+    return this._sortByUpdatedAt(this._deduplicateSessions(allSessions));
+  }
+
+  /**
+   * Deduplicate sessions with the same ID (e.g. VSCode sessions in multiple workspaces).
+   * Keeps the most recently updated session for each ID.
+   * @private
+   */
+  _deduplicateSessions(sessions) {
+    const seen = new Map();
+    for (const session of sessions) {
+      const existing = seen.get(session.id);
+      if (!existing || (session.updatedAt && existing.updatedAt && new Date(session.updatedAt) > new Date(existing.updatedAt))) {
+        seen.set(session.id, session);
+      }
+    }
+    return Array.from(seen.values());
   }
 
   /**
@@ -555,7 +571,7 @@ class SessionRepository {
               hasEvents: true,
               eventCount: requests.reduce((s, r) => s + (r.response || []).length, 0) + requests.length * 2 + 1,
               duration: effectiveEnd2.getTime() - createdAt.getTime(),
-              sessionStatus: ((Date.now() - effectiveEnd2.getTime()) < 5 * 60 * 1000 || (Date.now() - stats.mtime.getTime()) < 5 * 60 * 1000) ? 'wip' : 'completed',
+              sessionStatus: ((Date.now() - effectiveEnd2.getTime()) < 15 * 60 * 1000 || (Date.now() - stats.mtime.getTime()) < 15 * 60 * 1000) ? 'wip' : 'completed',
               selectedModel: firstReq.modelId || null,
               copilotVersion: copilotChatVersion,
               workspace: { cwd: realWorkspacePath || path.join(workspaceStorageDir, hash) },
@@ -711,7 +727,7 @@ class SessionRepository {
       return 'completed';
     }
     if (metadata.lastEventTime !== null && metadata.lastEventTime !== undefined) {
-      const WIP_THRESHOLD_MS = 5 * 60 * 1000;
+      const WIP_THRESHOLD_MS = 15 * 60 * 1000;
       if ((Date.now() - metadata.lastEventTime) < WIP_THRESHOLD_MS) {
         return 'wip';
       }
@@ -999,7 +1015,7 @@ class SessionRepository {
             hasEvents: true,
             eventCount: requests.reduce((s, r) => s + (r.response || []).length, 0) + requests.length * 2 + 1,
             duration: effectiveEndTime.getTime() - createdAt.getTime(),
-            sessionStatus: ((Date.now() - effectiveEndTime.getTime()) < 5 * 60 * 1000 || (Date.now() - stats.mtime.getTime()) < 5 * 60 * 1000) ? 'wip' : 'completed',
+            sessionStatus: ((Date.now() - effectiveEndTime.getTime()) < 15 * 60 * 1000 || (Date.now() - stats.mtime.getTime()) < 15 * 60 * 1000) ? 'wip' : 'completed',
             selectedModel: model,
             agentId,
             toolCount,
