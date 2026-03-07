@@ -30,6 +30,21 @@ test.describe('Tagging Feature', () => {
         console.warn('Failed to clean up tags:', error.message);
       }
     }
+    // Clean up autocomplete-test tag from sessions[1] (set by autocomplete test)
+    try {
+      const response = await request.get('/api/sessions');
+      const sessions = await response.json();
+      if (sessions.length > 1) {
+        const otherSessionId = sessions[1].id;
+        if (otherSessionId !== SESSION_ID) {
+          await request.put(`/api/sessions/${otherSessionId}/tags`, {
+            data: { tags: [] }
+          });
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to clean up autocomplete tags:', error.message);
+    }
   });
 
   test.describe('API Tests', () => {
