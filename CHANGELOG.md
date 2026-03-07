@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-03-07
+
+### Fixed
+- **Session Deduplication** - VSCode sessions with the same ID across multiple workspaces are now deduplicated (keeps most recently updated)
+- **WIP Status Accuracy** - VSCode agentic sessions now also check file mtime for WIP detection; threshold increased from 5 to 15 minutes
+- **Timeline Bar Positioning** - UserReq rows with 0 tools no longer render at the start of the timeline
+- **Tag Isolation** - Tags now use filePath-based storage to prevent shared directory collisions (Claude, Pi-Mono, Copilot CLI)
+- **Per-Session Insight Files** - Agent review files use `{sessionId}.agent-review.md` naming to avoid collisions
+- **Export All Sources** - Session export works for all sources including VSCode; file-based exports include `.tags.json`
+- **E2E Test Cleanup** - Autocomplete test properly cleans up tags; selector/assertion fixes for new source UI
+
+### Performance
+- **60s Cache + Request Dedup** - `SessionRepository.findAll()` results cached for 60 seconds with concurrent request deduplication, reducing TTFB from ~11s to <100ms on cache hit
+
 ## [0.3.0] - 2026-03-07
 
 ### Added
