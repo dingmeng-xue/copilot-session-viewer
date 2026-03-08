@@ -3068,7 +3068,7 @@
                             class="tool-header-line"
                             @click="toggleTool(item.stableId + '-' + idx)"
                           >
-                            <span class="tool-connector"></span>
+                            <span class="tool-connector">{{ idx === getToolGroups(item).length - 1 ? '└─' : '├─' }}</span>
                             <span class="tool-expand-icon">{{ expandedTools[item.stableId + '-' + idx] ? '▼' : '▶' }}</span>
                             <span class="tool-name">🔧&nbsp;{{ group.start?.data?.toolName || group.tool || 'Tool' }}</span>
                             <span :class="getToolStatus(group).color" style="margin-left: 4px;">({{ getToolStatus(group).icon }}{{ getToolDuration(group) ? ' ' + getToolDuration(group) : '' }})</span>
