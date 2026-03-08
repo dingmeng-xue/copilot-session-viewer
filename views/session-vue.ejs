@@ -509,6 +509,37 @@
       padding: 0 16px;
     }
     
+    .scroll-float-btns {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 9999;
+    }
+    .scroll-edge-btn {
+      background: #21262d;
+      color: #c9d1d9;
+      border: 1px solid #30363d;
+      border-radius: 50%;
+      width: 36px;
+      height: 36px;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      transition: background 0.15s, transform 0.1s;
+      padding: 0;
+    }
+    .scroll-edge-btn:hover {
+      background: #388bfd;
+      border-color: #388bfd;
+      color: #fff;
+      transform: scale(1.1);
+    }
     .search-input {
       width: 300px;
       padding: 6px 12px;
@@ -1928,6 +1959,27 @@
           });
         };
         
+        const scrollToTop = () => {
+          if (!scrollerRef.value) return;
+          const doScroll = (attempts) => {
+            if (attempts <= 0 || !scrollerRef.value) return;
+            scrollerRef.value.scrollToItem(0);
+            setTimeout(() => doScroll(attempts - 1), 100);
+          };
+          doScroll(3);
+        };
+
+        const scrollToBottom = () => {
+          if (!scrollerRef.value) return;
+          const lastIndex = filteredEvents.value.length - 1;
+          const doScroll = (attempts) => {
+            if (attempts <= 0 || !scrollerRef.value) return;
+            scrollerRef.value.scrollToItem(lastIndex);
+            setTimeout(() => doScroll(attempts - 1), 100);
+          };
+          doScroll(5);
+        };
+
         const jumpToTurn = (turnId) => {
           const turn = turns.value.find(t => t.id === turnId);
           if (turn) {
@@ -2453,6 +2505,8 @@
           getSubagentColor,
           setFilter,
           scrollToTurn,
+          scrollToTop,
+          scrollToBottom,
           jumpToTurn,
           getTurnNumber,
           getTurnDuration,
@@ -2915,6 +2969,12 @@
                   </DynamicScrollerItem>
                 </template>
               </DynamicScroller>
+
+              <!-- Floating scroll buttons -->
+              <div class="scroll-float-btns">
+                <button @click="scrollToTop" title="Scroll to top" class="scroll-edge-btn">▲</button>
+                <button @click="scrollToBottom" title="Scroll to bottom" class="scroll-edge-btn">▼</button>
+              </div>
             </div>
           </div>
           
