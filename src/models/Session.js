@@ -40,11 +40,21 @@ class Session {
    * @returns {Session}
    */
   static fromDirectory(dirPath, id, stats, workspace, eventCount, duration, isImported, hasInsight, copilotVersion, selectedModel, sessionStatus) {
+    const createdAt = workspace?.created_at
+      ? new Date(workspace.created_at)
+      : workspace?.startTime
+        ? new Date(workspace.startTime)
+        : stats.birthtime;
+    const updatedAt = workspace?.updated_at
+      ? new Date(workspace.updated_at)
+      : workspace?.endTime
+        ? new Date(workspace.endTime)
+        : stats.mtime;
     return new Session(id, 'directory', {
       directory: dirPath, // Add directory path
       workspace: workspace,
-      createdAt: workspace?.created_at || stats.birthtime,
-      updatedAt: workspace?.updated_at || stats.mtime,
+      createdAt,
+      updatedAt,
       summary: workspace?.summary || 'No summary',
       hasEvents: eventCount > 0,
       eventCount: eventCount,
