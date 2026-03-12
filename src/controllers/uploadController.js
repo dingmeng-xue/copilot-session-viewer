@@ -4,6 +4,7 @@ const os = require('os');
 const multer = require('multer');
 const { spawn } = require('child_process');
 const { isValidSessionId } = require('../utils/helpers');
+const { trackEvent, trackException } = require('../telemetry');
 const processManager = require('../utils/processManager');
 const config = require('../config');
 
@@ -71,6 +72,9 @@ class UploadController {
         if (code !== 0) {
           return res.status(500).json({ error: 'Failed to create zip file' });
         }
+
+        // Track SessionShared event
+        trackEvent('SessionShared', { sessionId });
 
         res.download(zipFile, `session-${sessionId}.zip`, (err) => {
           fs.promises.unlink(zipFile).catch(() => {});
@@ -181,6 +185,7 @@ class UploadController {
       processManager.register(unzipProcess, { name: 'unzip-import' });
 
       unzipProcess.on('close', async (code) => {
+        let sessionDirName; // Declare here for access in catch block
         try {
           await fs.promises.unlink(zipPath);
 
@@ -195,7 +200,7 @@ class UploadController {
             return res.status(400).json({ error: 'Empty zip file' });
           }
 
-          const sessionDirName = entries[0];
+          sessionDirName = entries[0];
 
           // Validate session directory name to prevent Zip Slip path traversal
           if (!isValidSessionId(sessionDirName)) {
@@ -222,9 +227,23 @@ class UploadController {
           await fs.promises.rename(sessionPath, targetPath);
           await fs.promises.rm(extractDir, { recursive: true, force: true });
 
+          // Track SessionImported event
+          const stats = await fs.promises.stat(zipPath).catch(() => ({ size: 0 }));
+          trackEvent('SessionImported', {
+            format: 'copilot',
+            fileSize: stats.size.toString()
+          });
+
           res.json({ success: true, sessionId: sessionDirName });
         } catch (err) {
           console.error('Error importing session:', err);
+
+          // Track import failure
+          trackException(err, {
+            operation: 'importSession',
+            sessionId: sessionDirName || 'unknown'
+          });
+
           await fs.promises.rm(extractDir, { recursive: true, force: true }).catch(() => {});
           res.status(500).json({ error: 'Error importing session' });
         }
@@ -232,12 +251,24 @@ class UploadController {
 
       unzipProcess.on('error', async (err) => {
         console.error('Error extracting zip:', err);
+
+        // Track upload/extraction failure
+        trackException(err, {
+          operation: 'importSession_unzip'
+        });
+
         await fs.promises.unlink(zipPath).catch(() => {});
         await fs.promises.rm(extractDir, { recursive: true, force: true }).catch(() => {});
         res.status(500).json({ error: 'Failed to extract zip file' });
       });
     } catch (err) {
       console.error('Error processing upload:', err);
+
+      // Track upload processing failure
+      trackException(err, {
+        operation: 'importSession_upload'
+      });
+
       if (req.file) {
         await fs.promises.unlink(req.file.path).catch(() => {});
       }

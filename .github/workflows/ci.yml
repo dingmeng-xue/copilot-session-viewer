@@ -31,11 +31,50 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
+      - name: Build frontend
+        run: npm run build:prod
+      
       - name: Run linter
         run: npm run lint:check
       
       - name: Run unit tests
         run: npm test
+        env:
+          DISABLE_TELEMETRY: 'true'
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+      
+      - name: Install dependencies and build
+        run: |
+          npm ci
+          npm run build:prod
+      
+      - name: Pack tarball
+        run: npm pack
+      
+      - name: Verify tarball contents
+        run: |
+          TARBALL=$(ls *.tgz)
+          tar tzf "$TARBALL" | grep "public/js/" | head -10
+          echo "--- Checking minified files in tarball ---"
+          tar tzf "$TARBALL" | grep -q "public/js/homepage.min.js" && echo "✅ homepage.min.js"
+          tar tzf "$TARBALL" | grep -q "public/js/session-detail.min.js" && echo "✅ session-detail.min.js"
+          tar tzf "$TARBALL" | grep -q "public/js/time-analyze.min.js" && echo "✅ time-analyze.min.js"
+          tar tzf "$TARBALL" | grep -q "public/js/telemetry-browser.min.js" && echo "✅ telemetry-browser.min.js"
+          echo "--- Checking NO source files ---"
+          ! tar tzf "$TARBALL" | grep -q "src/frontend/" && echo "✅ No source files"
       
       - name: Setup test session directories
         run: |
@@ -51,23 +90,28 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
       
-      - name: Verify test session generation
+      - name: Start server from tarball via npx
         run: |
-          echo "📊 Copilot sessions:"
-          ls -la ~/.copilot/session-state/ | head -10
-          echo "📊 Claude sessions:"
-          ls -la ~/.claude/projects/ 2>/dev/null || echo "No Claude sessions"
-          echo "📊 Pi-Mono sessions:"
-          ls -la ~/.pi/agent/sessions/ 2>/dev/null || echo "No Pi-Mono sessions"
+          TARBALL=$(ls $GITHUB_WORKSPACE/*.tgz)
+          export COPILOT_SESSION_DIR="$HOME/.copilot/session-state"
+          export CLAUDE_SESSION_DIR="$HOME/.claude/projects"
+          export PI_MONO_SESSION_DIR="$HOME/.pi/agent/sessions"
+          export PORT=3838
+          export DISABLE_TELEMETRY=true
+          npx -y "$TARBALL" &
+          sleep 3
+          curl -sf http://localhost:3838/ > /dev/null
+          echo "✅ Server started via npx from tarball"
       
-      - name: Run E2E tests
+      - name: Run E2E tests against tarball server
         run: |
           export COPILOT_SESSION_DIR="$HOME/.copilot/session-state"
           export CLAUDE_SESSION_DIR="$HOME/.claude/projects"
           export PI_MONO_SESSION_DIR="$HOME/.pi/agent/sessions"
-          npm run test:e2e
+          npx playwright test
         env:
           PORT: 3838
+          DISABLE_TELEMETRY: 'true'
       
       - name: Upload test results
         if: failure()

@@ -1,6 +1,7 @@
 const TagService = require('../services/tagService');
 const SessionRepository = require('../services/sessionRepository');
 const { isValidSessionId } = require('../utils/helpers');
+const { trackEvent } = require('../telemetry');
 
 class TagController {
   constructor(tagService = null, sessionRepository = null) {
@@ -88,6 +89,13 @@ class TagController {
       }
 
       const savedTags = await this.tagService.setSessionTags(session, tags);
+
+      // Track TagUpdated event
+      trackEvent('TagUpdated', {
+        sessionId,
+        tagCount: savedTags.length.toString()
+      });
+
       res.json({ tags: savedTags });
     } catch (err) {
       console.error('Error setting session tags:', err);

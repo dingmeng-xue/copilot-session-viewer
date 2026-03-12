@@ -85,6 +85,35 @@ export default [
     },
   },
   
+  // Frontend source files (browser globals from CDN)
+  {
+    files: ['src/frontend/**/*.js'],
+    languageOptions: {
+      sourceType: 'script',
+      globals: {
+        ...globals.browser,
+        Vue: 'readonly',
+        VueVirtualScroller: 'readonly',
+        marked: 'readonly',
+        DOMPurify: 'readonly',
+        trackClick: 'readonly',
+        trackPageView: 'readonly',
+        trackMetric: 'readonly',
+        appInsights: 'readonly',
+      },
+    },
+    rules: {
+      'no-unused-vars': ['error', { 
+        argsIgnorePattern: '^_', 
+        varsIgnorePattern: '^_|^app$',
+        caughtErrors: 'none'
+      }],
+      'eqeqeq': 'warn', // Relaxed for extracted legacy code
+      'prefer-const': 'off',
+      'no-useless-assignment': 'off',
+    },
+  },
+
   // Ignore patterns
   {
     ignores: [
@@ -93,6 +122,7 @@ export default [
       'dist/',
       '.git/',
       '*.min.js',
+      'public/js/*.min.js',
       'public/hyperlist.js', // External library
       'check-*.js', // Debug scripts
       'test-*.js', // Debug scripts

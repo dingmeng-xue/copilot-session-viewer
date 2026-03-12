@@ -1,24 +1,20 @@
-# Development and testing
+# Frontend source files (only ship minified bundles)
+src/frontend/
+
+# Build tooling
+scripts/build.mjs
+
+# Source maps
+public/js/*.map
+
+# Tests
 __tests__/
-.github/
-eslint.config.mjs
-.claude/
-
-# Documentation (keep only README.md)
-docs/
-CONTRIBUTING.md
-AGENTS.md
-RELEASE.md
-
-# Test artifacts
-test-results/
-playwright-report/
-playwright.config.js
+e2e/
 jest.config.js
+playwright.config.js
+.github/
 
-# Scripts
-scripts/
-
-# Session data
-sessions/
-*.jsonl
+# Dev files
+.eslintrc*
+.env
+.env.example

@@ -9,7 +9,7 @@ const config = require('./config');
 // Middleware
 // Rate limiting disabled for local development
 // const { globalLimiter, insightGenerationLimiter, insightAccessLimiter, uploadLimiter } = require('./middleware/rateLimiting');
-const { requestTimeout, developmentCors, errorHandler, notFoundHandler } = require('./middleware/common');
+const { requestTimeout, developmentCors, errorHandler, notFoundHandler, telemetryLocals } = require('./middleware/common');
 
 // Controllers
 const SessionController = require('./controllers/sessionController');
@@ -68,6 +68,7 @@ function createApp(options = {}) {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
   app.use(requestTimeout);
+  app.use(telemetryLocals);
 
   // CORS in development
   if (config.NODE_ENV === 'development') {

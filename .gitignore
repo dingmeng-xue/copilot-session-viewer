@@ -39,3 +39,7 @@ TODO*.md
 # CI test sessions
 .test-sessions/
 .nyc_output/
+
+# Source maps
+public/js/*.map
+public/js/*.min.js

@@ -1,5 +1,6 @@
 const InsightService = require('../services/insightService');
 const { isValidSessionId } = require('../utils/helpers');
+const { trackEvent, trackMetric, trackException } = require('../telemetry');
 
 class InsightController {
   constructor(insightService = null, sessionService = null) {
@@ -39,10 +40,30 @@ class InsightController {
         return res.status(400).json({ error: 'Session directory not available' });
       }
 
+      const startTime = Date.now();
       const result = await this.insightService.generateInsight(session.id, session.directory, session.source, forceRegenerate);
+      const durationMs = Date.now() - startTime;
+
+      // Track InsightGenerated event
+      trackEvent('InsightGenerated', {
+        sessionId,
+        source: session.source || 'unknown',
+        durationMs: durationMs.toString()
+      });
+
+      // Track InsightGenerationTime metric
+      trackMetric('InsightGenerationTime', durationMs, { sessionId, source: session.source || 'unknown' });
+
       res.json(result);
     } catch (err) {
       console.error('Error generating insight:', err);
+
+      // Track insight generation failure
+      trackException(err, {
+        sessionId: req.params.id,
+        operation: 'generateInsight'
+      });
+
       res.status(500).json({ error: err.message || 'Error generating insight' });
     }
   }
@@ -67,6 +88,12 @@ class InsightController {
       }
 
       const result = await this.insightService.getInsightStatus(session.id, session.directory, session.source);
+
+      // Track InsightViewed event if insight is ready
+      if (result.status === 'ready' && result.report) {
+        trackEvent('InsightViewed', { sessionId });
+      }
+
       res.json(result);
     } catch (err) {
       console.error('Error getting insight status:', err);
@@ -94,6 +121,10 @@ class InsightController {
       }
 
       const result = await this.insightService.deleteInsight(session.id, session.directory, session.source);
+
+      // Track InsightDeleted event
+      trackEvent('InsightDeleted', { sessionId });
+
       res.json(result);
     } catch (err) {
       console.error('Error deleting insight:', err);

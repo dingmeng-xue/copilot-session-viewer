@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-03-13
+
+### Added
+- **Frontend Build Pipeline** - esbuild-based build system (`scripts/build.mjs`) extracts inline JS from EJS templates into standalone minified bundles
+- **Application Insights Telemetry** - Backend telemetry via `applicationinsights@2.9.8` (11 custom events, 3 metrics); frontend telemetry via CDN SDK (13 interaction events)
+- **Browser Telemetry Snippet** - `views/telemetry-snippet.ejs` partial for consistent frontend telemetry injection
+- **Tarball Verification in CI** - E2E tests now run against `npx`-installed tgz package, verifying the published artifact works end-to-end
+- **npm Publish Smoke Test** - Pre-publish step installs tgz, starts server, and verifies HTTP 200
+
+### Changed
+- **Frontend Architecture** - 4642 lines of inline JS extracted from 3 EJS templates into 4 standalone bundles (net -3370 lines)
+  - `src/frontend/homepage.js` → `public/js/homepage.min.js` (9.7K)
+  - `src/frontend/session-detail.js` → `public/js/session-detail.min.js` (45.5K)
+  - `src/frontend/time-analyze.js` → `public/js/time-analyze.min.js` (54.6K)
+  - `src/frontend/telemetry-browser.js` → `public/js/telemetry-browser.min.js` (1.5K)
+- **Server Data Bridge** - EJS templates pass server data to external bundles via `window.__PAGE_DATA`
+- **CI Pipeline** - E2E tests run against packed tgz via `npx` (not source); telemetry disabled in all CI steps
+- **npm Package** - Source files (`src/frontend/`) excluded via `.npmignore`; only `.min.js` bundles shipped
+
+### Fixed
+- **Missing Runtime Dependency** - `adm-zip` moved from devDependencies to dependencies (was causing `MODULE_NOT_FOUND` when installed from npm)
+- **ESLint Config** - Added frontend globals (Vue, marked, DOMPurify), excluded `public/js/*.min.js` from linting, fixed unused vars and eqeqeq warnings
+
 ## [0.3.2] - 2026-03-08
 
 ### Fixed

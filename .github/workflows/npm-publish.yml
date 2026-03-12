@@ -26,11 +26,41 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
+      - name: Build frontend
+        run: npm run build:prod
+      
       - name: Run tests
         run: npm run test
       
       - name: Run linter
         run: npm run lint:check
+      
+      - name: Verify tarball before publish
+        run: |
+          npm pack
+          TARBALL=$(ls *.tgz)
+          mkdir -p /tmp/verify-tgz
+          cd /tmp/verify-tgz
+          npm init -y
+          npm install "$GITHUB_WORKSPACE/$TARBALL"
+          echo "--- Checking minified files ---"
+          test -f node_modules/@qiaolei81/copilot-session-viewer/public/js/homepage.min.js
+          test -f node_modules/@qiaolei81/copilot-session-viewer/public/js/session-detail.min.js
+          test -f node_modules/@qiaolei81/copilot-session-viewer/public/js/time-analyze.min.js
+          test -f node_modules/@qiaolei81/copilot-session-viewer/public/js/telemetry-browser.min.js
+          echo "--- Checking NO source files ---"
+          test ! -d node_modules/@qiaolei81/copilot-session-viewer/src/frontend
+          echo "--- Smoke test: server starts ---"
+          export DISABLE_TELEMETRY=true
+          export PORT=3839
+          mkdir -p ~/.copilot/session-state
+          node node_modules/@qiaolei81/copilot-session-viewer/server.js &
+          sleep 3
+          curl -sf http://localhost:3839/ > /dev/null
+          kill %1
+          echo "✅ Tarball verified"
+          cd "$GITHUB_WORKSPACE"
+          rm -rf /tmp/verify-tgz *.tgz
       
       - name: Publish to npm
         run: npm publish --provenance --access public

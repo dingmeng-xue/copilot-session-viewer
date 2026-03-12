@@ -1,5 +1,6 @@
 const SessionService = require('../services/sessionService');
 const { isValidSessionId, buildMetadata } = require('../utils/helpers');
+const { trackEvent, trackMetric } = require('../telemetry');
 const AdmZip = require('adm-zip');
 const path = require('path');
 const fs = require('fs');
@@ -40,6 +41,12 @@ class SessionController {
         sourceHints: JSON.stringify(sourceHints)
       };
 
+      // Track HomepageViewed event
+      trackEvent('HomepageViewed', {
+        sessionCount: paginationData.totalSessions.toString(),
+        sourceFilter: 'copilot'
+      });
+
       res.render('index', templateData);
     } catch (err) {
       console.error('Error loading sessions:', err);
@@ -62,6 +69,29 @@ class SessionController {
       }
 
       const metadata = buildMetadata(session);
+
+      // Track SessionViewed event
+      trackEvent('SessionViewed', {
+        sessionId,
+        source: session.source || 'unknown',
+        eventCount: (session.eventCount || metadata.totalEvents || 0).toString(),
+        duration: (session.duration || metadata.duration || 0).toString(),
+        model: session.model || metadata.model || 'unknown',
+        sessionStatus: session.status || metadata.status || 'unknown'
+      });
+
+      // Track SessionEventCount metric
+      const eventCount = session.eventCount || metadata.totalEvents || 0;
+      if (eventCount > 0) {
+        trackMetric('SessionEventCount', eventCount, { sessionId, source: session.source || 'unknown' });
+      }
+
+      // Track SessionDuration metric
+      const duration = session.duration || metadata.duration || 0;
+      if (duration > 0) {
+        trackMetric('SessionDuration', duration, { sessionId, source: session.source || 'unknown' });
+      }
+
       res.render('session-vue', { sessionId, events: [], metadata });
     } catch (err) {
       console.error('Error loading session:', err);
@@ -84,6 +114,13 @@ class SessionController {
       }
 
       const metadata = buildMetadata(session);
+
+      // Track TimeAnalysisViewed event
+      trackEvent('TimeAnalysisViewed', {
+        sessionId,
+        turnCount: (metadata.totalEvents || 0).toString()
+      });
+
       res.render('time-analyze', { sessionId, events: [], metadata });
     } catch (err) {
       console.error('Error loading time analysis:', err);
@@ -104,6 +141,14 @@ class SessionController {
           return res.status(400).json({ error: 'Invalid pagination parameters' });
         }
         const paginationData = await this.sessionService.getPaginatedSessions(page, limit, sourceFilter);
+
+        // Track SessionListLoaded event for API pagination
+        trackEvent('SessionListLoaded', {
+          page: page.toString(),
+          limit: limit.toString(),
+          totalSessions: paginationData.totalSessions.toString()
+        });
+
         res.set({ 'Cache-Control': 'public, max-age=60' });
         res.json(paginationData);
       } else if (sourceFilter && limit) {
@@ -139,6 +184,13 @@ class SessionController {
       // Calculate page number from offset
       const page = Math.floor(offset / limit) + 1;
       const paginationData = await this.sessionService.getPaginatedSessions(page, limit, sourceFilter);
+
+      // Track SessionListLoaded event
+      trackEvent('SessionListLoaded', {
+        page: page.toString(),
+        limit: limit.toString(),
+        totalSessions: paginationData.totalSessions.toString()
+      });
 
       res.json({
         sessions: paginationData.sessions,
@@ -382,6 +434,10 @@ class SessionController {
       const zipBuffer = zip.toBuffer();
       res.setHeader('Content-Type', 'application/zip');
       res.setHeader('Content-Disposition', `attachment; filename="session-${sessionId}.zip"`);
+
+      // Track SessionExported event
+      trackEvent('SessionExported', { sessionId });
+
       res.send(zipBuffer);
     } catch (err) {
       console.error('Error exporting session:', err);
