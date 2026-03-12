@@ -123,6 +123,7 @@ export default [
       '.git/',
       '*.min.js',
       'public/js/*.min.js',
+      'public/vendor/**',
       'public/hyperlist.js', // External library
       'check-*.js', // Debug scripts
       'test-*.js', // Debug scripts

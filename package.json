@@ -93,6 +93,7 @@
     "public/js/*.min.js",
     "public/img/",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "public/vendor/"
   ]
 }
