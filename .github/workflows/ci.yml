@@ -90,18 +90,22 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
       
-      - name: Start server from tarball via npx
+      - name: Install and start server from tarball
         run: |
-          TARBALL=$(ls $GITHUB_WORKSPACE/*.tgz)
+          TARBALL="$(ls $GITHUB_WORKSPACE/*.tgz)"
+          mkdir -p /tmp/tgz-test
+          cd /tmp/tgz-test
+          npm init -y > /dev/null
+          npm install "$TARBALL" > /dev/null 2>&1
           export COPILOT_SESSION_DIR="$HOME/.copilot/session-state"
           export CLAUDE_SESSION_DIR="$HOME/.claude/projects"
           export PI_MONO_SESSION_DIR="$HOME/.pi/agent/sessions"
           export PORT=3838
           export DISABLE_TELEMETRY=true
-          npx -y "$TARBALL" &
-          sleep 3
+          npx copilot-session-viewer &
+          sleep 5
           curl -sf http://localhost:3838/ > /dev/null
-          echo "✅ Server started via npx from tarball"
+          echo "✅ Server started from tarball"
       
       - name: Run E2E tests against tarball server
         run: |
