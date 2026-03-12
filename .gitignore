@@ -42,4 +42,5 @@ TODO*.md
 
 # Source maps
 public/js/*.map
+dist/*.map
 public/js/*.min.js

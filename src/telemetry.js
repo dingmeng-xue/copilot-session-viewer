@@ -12,6 +12,48 @@
  */
 
 const appInsights = require('applicationinsights');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const os = require('os');
+
+/**
+ * Get or create a persistent anonymous user ID.
+ * Stored in ~/.copilot-session-viewer/analytics-id
+ */
+function getAnonymousId() {
+  const dir = path.join(os.homedir(), '.copilot-session-viewer');
+  const filePath = path.join(dir, 'analytics-id');
+  try {
+    return fs.readFileSync(filePath, 'utf8').trim();
+  } catch {
+    const id = crypto.randomUUID();
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(filePath, id);
+    } catch { /* ignore write errors */ }
+    return id;
+  }
+}
+
+/**
+ * Get app version from package.json
+ */
+function getAppVersion() {
+  try {
+    // Try multiple paths (source vs bundled)
+    const candidates = [
+      path.join(__dirname, '..', 'package.json'),
+      path.join(__dirname, 'package.json'),
+    ];
+    for (const p of candidates) {
+      try {
+        return JSON.parse(fs.readFileSync(p, 'utf8')).version;
+      } catch { /* try next */ }
+    }
+  } catch { /* ignore */ }
+  return 'unknown';
+}
 
 // Determine if telemetry should be disabled
 const isTestEnvironment = process.env.NODE_ENV === 'test';
@@ -43,8 +85,19 @@ if (!isDisabled) {
     client = appInsights.defaultClient;
 
     // Set context properties
+    const appVersion = getAppVersion();
+    const anonymousId = getAnonymousId();
     client.context.tags[client.context.keys.cloudRole] = 'copilot-session-viewer';
-    client.context.tags[client.context.keys.cloudRoleInstance] = require('os').hostname();
+    client.context.tags[client.context.keys.cloudRoleInstance] = os.hostname();
+    client.context.tags[client.context.keys.applicationVersion] = appVersion;
+    client.context.tags[client.context.keys.userId] = anonymousId;
+
+    // Add version to every event via telemetry initializer
+    client.addTelemetryProcessor((envelope) => {
+      envelope.data.baseData.properties = envelope.data.baseData.properties || {};
+      envelope.data.baseData.properties.appVersion = appVersion;
+      return true;
+    });
 
     console.log('✅ Application Insights telemetry initialized');
   } catch (error) {

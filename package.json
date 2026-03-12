@@ -87,7 +87,7 @@
   },
   "files": [
     "bin/",
-    "dist/",
+    "dist/server.min.js",
     "views/",
     "public/css/",
     "public/js/*.min.js",
