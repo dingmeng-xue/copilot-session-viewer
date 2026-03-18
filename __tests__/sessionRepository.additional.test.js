@@ -1028,4 +1028,102 @@ describe('SessionRepository - Additional Coverage', () => {
       expect(result).toBeDefined();
     });
   });
+
+  describe('VS Code dirCandidates resolution', () => {
+    it('default vscode source has a non-null dir set to first candidate', () => {
+      const repo = new SessionRepository();
+      const vscode = repo.sources.find(s => s.type === 'vscode');
+      expect(vscode).toBeDefined();
+      expect(vscode.dir).not.toBeNull();
+      expect(vscode.dirCandidates).toBeInstanceOf(Array);
+      expect(vscode.dirCandidates.length).toBeGreaterThanOrEqual(2);
+      expect(vscode.dir).toBe(vscode.dirCandidates[0]);
+    });
+
+    it('when VSCODE_WORKSPACE_STORAGE_DIR is set, dir uses env var and dirCandidates is absent', () => {
+      process.env.VSCODE_WORKSPACE_STORAGE_DIR = '/custom/vscode/storage';
+      try {
+        const repo = new SessionRepository();
+        const vscode = repo.sources.find(s => s.type === 'vscode');
+        expect(vscode.dir).toBe('/custom/vscode/storage');
+        expect(vscode.dirCandidates).toBeUndefined();
+      } finally {
+        delete process.env.VSCODE_WORKSPACE_STORAGE_DIR;
+      }
+    });
+
+    it('_resolveSourceDir returns source.dir unchanged when no dirCandidates', async () => {
+      const repo = new SessionRepository([{ type: 'copilot', dir: tmpDir }]);
+      const source = { type: 'copilot', dir: '/some/dir' };
+      const result = await repo._resolveSourceDir(source);
+      expect(result).toBe('/some/dir');
+    });
+
+    it('_resolveSourceDir returns first accessible candidate and caches it on source', async () => {
+      const repo = new SessionRepository([{ type: 'copilot', dir: tmpDir }]);
+      const stableDir = path.join(tmpDir, 'stable');
+      const insidersDir = path.join(tmpDir, 'insiders');
+      await fs.mkdir(stableDir);
+      const source = { type: 'vscode', dir: stableDir, dirCandidates: [stableDir, insidersDir] };
+
+      const result = await repo._resolveSourceDir(source);
+      expect(result).toBe(stableDir);
+      expect(source.dir).toBe(stableDir);
+    });
+
+    it('_resolveSourceDir falls back to second candidate when first is missing', async () => {
+      const repo = new SessionRepository([{ type: 'copilot', dir: tmpDir }]);
+      const stableDir = path.join(tmpDir, 'stable-missing');
+      const insidersDir = path.join(tmpDir, 'insiders');
+      await fs.mkdir(insidersDir);
+      const source = { type: 'vscode', dir: stableDir, dirCandidates: [stableDir, insidersDir] };
+
+      const result = await repo._resolveSourceDir(source);
+      expect(result).toBe(insidersDir);
+      expect(source.dir).toBe(insidersDir);
+    });
+
+    it('_resolveSourceDir returns null when no candidate is accessible', async () => {
+      const repo = new SessionRepository([{ type: 'copilot', dir: tmpDir }]);
+      const source = {
+        type: 'vscode',
+        dir: '/nonexistent/stable',
+        dirCandidates: ['/nonexistent/stable', '/nonexistent/insiders']
+      };
+
+      const result = await repo._resolveSourceDir(source);
+      expect(result).toBeNull();
+    });
+
+    it('_scanSource warns and returns [] when no vscode candidate exists', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const repo = new SessionRepository([{
+        type: 'vscode',
+        dir: '/nonexistent/stable',
+        dirCandidates: ['/nonexistent/stable', '/nonexistent/insiders']
+      }]);
+
+      const sessions = await repo.findAll();
+      expect(sessions).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('No vscode directory found'));
+      warnSpy.mockRestore();
+    });
+
+    it('findById resolves vscode dir via candidates before searching', async () => {
+      const insidersDir = path.join(tmpDir, 'insiders-storage');
+      await fs.mkdir(insidersDir);
+
+      const repo = new SessionRepository([{
+        type: 'vscode',
+        dir: path.join(tmpDir, 'stable-missing'),
+        dirCandidates: [path.join(tmpDir, 'stable-missing'), insidersDir]
+      }]);
+
+      // No session files exist, but the key test is that it doesn't throw on null dir
+      const result = await repo.findById('some-session-id');
+      expect(result).toBeNull();
+      // source.dir should now be updated to the insiders path
+      expect(repo.sources[0].dir).toBe(insidersDir);
+    });
+  });
 });

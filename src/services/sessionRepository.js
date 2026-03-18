@@ -71,11 +71,12 @@ class SessionRepository {
         },
         {
           type: 'vscode',
-          // dir is resolved lazily at scan time from dirCandidates (async, no sync I/O on startup)
-          dir: process.env.VSCODE_WORKSPACE_STORAGE_DIR || null,
-          dirCandidates: process.env.VSCODE_WORKSPACE_STORAGE_DIR
-            ? null
-            : getVSCodeWorkspaceStorageCandidates(),
+          // dir defaults to the stable candidate so findById always has a non-null value.
+          // dirCandidates lets _scanSource fall back to Insiders at scan time (async).
+          ...(process.env.VSCODE_WORKSPACE_STORAGE_DIR
+            ? { dir: process.env.VSCODE_WORKSPACE_STORAGE_DIR }
+            : (() => { const c = getVSCodeWorkspaceStorageCandidates(); return { dir: c[0], dirCandidates: c }; })()
+          ),
         }
       ];
     }
@@ -174,17 +175,31 @@ class SessionRepository {
    * Scan a single source directory
    * @private
    */
+  /**
+   * Resolve the active directory for a source that has multiple candidates
+   * (e.g. VS Code stable vs Insiders). The resolved dir is cached on the
+   * source object to avoid repeated fs.access calls on subsequent scans.
+   * Returns null when no candidate is accessible.
+   * @private
+   */
+  async _resolveSourceDir(source) {
+    if (!source.dirCandidates) return source.dir;
+    for (const candidate of source.dirCandidates) {
+      try {
+        await fs.access(candidate);
+        source.dir = candidate; // cache for future calls
+        return candidate;
+      } catch { /* try next */ }
+    }
+    return null;
+  }
+
   async _scanSource(source) {
-    // Resolve dir from candidates if not already set (e.g. vscode Insiders fallback)
-    if (!source.dir && source.dirCandidates) {
-      for (const candidate of source.dirCandidates) {
-        try {
-          await fs.access(candidate);
-          source.dir = candidate;
-          break;
-        } catch { /* try next candidate */ }
-      }
-      if (!source.dir) {
+    // For sources with multiple candidates (e.g. VS Code stable vs Insiders),
+    // resolve the first accessible one.
+    if (source.dirCandidates) {
+      const resolved = await this._resolveSourceDir(source);
+      if (!resolved) {
         console.warn(`No ${source.type} directory found (tried: ${source.dirCandidates.join(', ')})`);
         return [];
       }
@@ -387,7 +402,10 @@ class SessionRepository {
       } else if (source.type === 'pi-mono') {
         session = await this._findPiMonoSession(sessionId, source.dir);
       } else if (source.type === 'vscode') {
-        session = await this._findVsCodeSession(sessionId, source.dir);
+        const dir = source.dirCandidates
+          ? await this._resolveSourceDir(source)
+          : source.dir;
+        if (dir) session = await this._findVsCodeSession(sessionId, dir);
       }
 
       if (session) return session;
