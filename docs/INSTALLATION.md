@@ -171,8 +171,12 @@ Create a `.env` file for custom configuration:
 PORT=3838
 NODE_ENV=development
 
-# Session Data Directory (auto-detected if omitted)
-SESSION_DIR=/path/to/custom/session-state
+# Session directories (all auto-detected if omitted)
+COPILOT_SESSION_DIR=/path/to/custom/session-state   # GitHub Copilot CLI
+SESSION_DIR=/path/to/custom/session-state            # Legacy alias for COPILOT_SESSION_DIR
+CLAUDE_SESSION_DIR=/path/to/claude/projects          # Claude Code CLI
+PI_MONO_SESSION_DIR=/path/to/pi/agent/sessions       # Pi-Mono
+VSCODE_WORKSPACE_STORAGE_DIR=/path/to/workspaceStorage  # Copilot Chat (VS Code)
 
 # Feature Flags
 ENABLE_INSIGHTS=true
@@ -181,16 +185,29 @@ ENABLE_EXPORT=true
 
 ### Custom Session Directory
 
-If your Copilot CLI sessions are in a custom location:
+Each session source has its own env var override. Use these for custom `--user-data-dir` VS Code installs, VS Code Insiders, or portable mode:
 
 ```bash
-# Method 1: Environment variable
-SESSION_DIR=/custom/path npx @qiaolei81/copilot-session-viewer
+# Override Copilot CLI sessions
+COPILOT_SESSION_DIR=/custom/path npx @qiaolei81/copilot-session-viewer
 
-# Method 2: Create .env file (for local installation)
-echo "SESSION_DIR=/custom/path" > .env
+# Override VS Code Copilot Chat sessions (e.g. VS Code Insiders or custom --user-data-dir)
+VSCODE_WORKSPACE_STORAGE_DIR="/path/to/Code - Insiders/User/workspaceStorage" npm start
+
+# Or create a .env file for permanent overrides
+cat > .env <<EOF
+COPILOT_SESSION_DIR=/custom/path
+VSCODE_WORKSPACE_STORAGE_DIR=/path/to/workspaceStorage
+EOF
 npm start
 ```
+
+**Default VS Code workspace storage paths (auto-detected):**
+- **macOS**: `~/Library/Application Support/Code/User/workspaceStorage`
+- **Linux**: `~/.config/Code/User/workspaceStorage`
+- **Windows**: `%APPDATA%\Code\User\workspaceStorage`
+
+If only VS Code Insiders is installed, `Code - Insiders` is automatically preferred.
 
 ---
 

@@ -69,7 +69,7 @@ copilot-session-viewer
 - **Vue 3** - Reactive virtual scrolling
 - **Express.js** - Robust backend API
 - **ZIP Import/Export** - Session sharing capabilities with security validation
-- **Multi-Source Support** - Copilot CLI (`~/.copilot/session-state/`), Copilot Chat (`~/Library/Application Support/Code/User/workspaceStorage/`), Claude (`~/.claude/projects/`), Pi-Mono (`~/.pi/agent/sessions/`)
+- **Multi-Source Support** - Copilot CLI (`~/.copilot/session-state/`), Copilot Chat (auto-detected per OS), Claude (`~/.claude/projects/`), Pi-Mono (`~/.pi/agent/sessions/`)
 - **Unified Event Format** - Consistent schema across all sources
 - **Memory Pagination** - Efficient handling of large sessions
 - **XSS Protection** - DOMPurify-based HTML sanitization
@@ -82,7 +82,7 @@ copilot-session-viewer
 1. **Generate Sessions** - Use GitHub Copilot CLI, Claude Code CLI, or Pi-Mono to create session logs
 2. **Auto-Discovery** - Sessions are automatically detected from:
    - Copilot CLI: `~/.copilot/session-state/`
-   - Copilot Chat: `~/Library/Application Support/Code/User/workspaceStorage/`
+   - Copilot Chat: auto-detected — `~/Library/Application Support/Code/User/workspaceStorage/` (macOS), `~/.config/Code/User/workspaceStorage/` (Linux), `%APPDATA%\Code\User\workspaceStorage\` (Windows)
    - Claude: `~/.claude/projects/`
    - Pi-Mono: `~/.pi/agent/sessions/`
 3. **Browse & Analyze** - View sessions with infinite scroll and detailed event streams
@@ -189,7 +189,7 @@ GitHub Actions workflow includes:
 ┌─────────────────────────────────────────────────┐
 │  Data Layer (Multi-Source)                      │
 │  • Copilot CLI: ~/.copilot/session-state/        │
-│  • Copilot Chat: ~/Library/.../workspaceStorage/ │
+│  • Copilot Chat: <OS-specific>/workspaceStorage/ │
 │  • Claude:  ~/.claude/projects/                  │
 │  • Pi-Mono: ~/.pi/agent/sessions/                │
 └─────────────────────────────────────────────────┘
