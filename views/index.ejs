@@ -580,7 +580,7 @@
       font-size: 13px;
       line-height: 1.6;
       color: #c9d1d9;
-      white-space: pre-wrap;
+      white-space: normal;
       word-break: break-word;
       box-shadow: 0 8px 24px rgba(0,0,0,0.5);
       pointer-events: none;
@@ -588,8 +588,31 @@
     .summary-tooltip.visible {
       display: block;
     }
+    /* Markdown prose styles inside tooltip */
+    .summary-tooltip h1, .summary-tooltip h2, .summary-tooltip h3,
+    .summary-tooltip h4, .summary-tooltip h5, .summary-tooltip h6 {
+      color: #e6edf3; margin: 8px 0 4px; font-weight: 600;
+    }
+    .summary-tooltip h1 { font-size: 15px; }
+    .summary-tooltip h2 { font-size: 14px; }
+    .summary-tooltip h3, .summary-tooltip h4 { font-size: 13px; }
+    .summary-tooltip p { margin: 4px 0; }
+    .summary-tooltip ul, .summary-tooltip ol { margin: 4px 0; padding-left: 18px; }
+    .summary-tooltip li { margin: 2px 0; }
+    .summary-tooltip code {
+      background: #2d333b; border-radius: 3px;
+      padding: 1px 4px; font-size: 12px; font-family: monospace;
+    }
+    .summary-tooltip pre {
+      background: #2d333b; border-radius: 6px;
+      padding: 8px 10px; overflow-x: auto; margin: 6px 0;
+    }
+    .summary-tooltip pre code { background: none; padding: 0; }
+    .summary-tooltip strong { color: #e6edf3; }
+    .summary-tooltip hr { border-color: #30363d; margin: 8px 0; }
   </style>
 
+  <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
   <div id="summary-tooltip" class="summary-tooltip"></div>
 
   <script>
@@ -600,12 +623,14 @@
       const el = e.target.closest('.session-summary[title]');
       if (!el) return;
       tooltipTarget = el;
-      // Store full text in data attr, remove title to suppress native tooltip
       if (!el.dataset.tooltipText) {
         el.dataset.tooltipText = el.getAttribute('title');
         el.removeAttribute('title');
       }
-      tooltip.textContent = el.dataset.tooltipText;
+      const md = el.dataset.tooltipText || '';
+      tooltip.innerHTML = (typeof marked !== 'undefined')
+        ? marked.parse(md, { breaks: true })
+        : md.replace(/</g, '&lt;').replace(/\n/g, '<br>');
       tooltip.classList.add('visible');
       positionTooltip(e);
     });
@@ -617,7 +642,7 @@
 
     document.addEventListener('mouseout', e => {
       if (!tooltipTarget) return;
-      const el = e.target.closest('.session-summary[title]');
+      const el = e.target.closest('.session-summary');
       if (el) {
         tooltipTarget = null;
         tooltip.classList.remove('visible');
