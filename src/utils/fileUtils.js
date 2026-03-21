@@ -72,7 +72,7 @@ async function parseYAML(filePath) {
  * @param {number} maxMessageLength - Max characters for first message (default 200)
  * @returns {Promise<Object>} Combined metadata object
  */
-async function getSessionMetadataOptimized(filePath, maxMessageLength = 200) {
+async function getSessionMetadataOptimized(filePath, maxMessageLength = 500) {
   try {
     const stream = fsSync.createReadStream(filePath, { encoding: 'utf-8' });
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
