@@ -51,7 +51,8 @@
     "release:minor": "./scripts/release.sh minor",
     "release:major": "./scripts/release.sh major",
     "build:prod": "node scripts/build.mjs --prod",
-    "prepublishOnly": "npm run build:prod"
+    "prepublishOnly": "npm run build:prod",
+    "start:local": "cross-env DISABLE_TELEMETRY=true node server.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
@@ -74,6 +75,7 @@
     "@istanbuljs/nyc-config-typescript": "^1.0.2",
     "@playwright/test": "^1.58.2",
     "@types/jest": "^30.0.0",
+    "cross-env": "^10.1.0",
     "esbuild": "^0.27.3",
     "eslint": "^10.0.0",
     "eslint-plugin-vue": "^10.8.0",
