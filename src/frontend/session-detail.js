@@ -1756,6 +1756,7 @@
             ref="scrollerRef"
             :items="filteredEvents"
             :min-item-size="80"
+            :prerender="10"
             key-field="stableId"
             class="scroller"
           >
