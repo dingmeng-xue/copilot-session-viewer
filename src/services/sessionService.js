@@ -984,6 +984,18 @@ class SessionService {
         // If only toolcalls, leave message empty (don't create placeholder)
       }
       
+      // subagent.selected: rename data.tools to data.allowedTools to avoid collision with tool rendering
+      if (event.type === 'subagent.selected' && Array.isArray(event.data?.tools)) {
+        normalized.data.allowedTools = event.data.tools;
+        delete normalized.data.tools;
+        if (event.data.agentDisplayName || event.data.agentName) {
+          normalized.data.message = `Agent: ${event.data.agentDisplayName || event.data.agentName}`;
+          if (normalized.data.allowedTools.length > 0 && normalized.data.allowedTools[0] !== '*') {
+            normalized.data.message += `\nTools: ${normalized.data.allowedTools.join(', ')}`;
+          }
+        }
+      }
+
       // Hook events (hook.start / hook.end)
       if (event.type === 'hook.start') {
         const d = event.data || {};
