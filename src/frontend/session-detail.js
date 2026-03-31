@@ -1661,7 +1661,15 @@
                       </span>
                     </td>
                   </tr>
-                  <tr v-if="metadata.copilotVersion">
+                  <tr v-if="metadata.modernizeVersion">
+                    <td>Version</td>
+                    <td>{{ metadata.modernizeVersion }}</td>
+                  </tr>
+                  <tr v-if="metadata.source === 'modernize' && metadata.copilotVersion">
+                    <td>Copilot SDK</td>
+                    <td>{{ metadata.copilotVersion }}</td>
+                  </tr>
+                  <tr v-if="metadata.copilotVersion && metadata.source !== 'modernize'">
                     <td>Version</td>
                     <td>{{ metadata.copilotVersion }}</td>
                   </tr>
