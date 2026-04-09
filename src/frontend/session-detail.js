@@ -11,6 +11,9 @@
 
 // Immediate initialization (script is at bottom, DOM is ready)
 (function() {
+  // Shared subagent ownership/filtering logic
+  const { computeSubagentOwnership, filterBySubagent } = require('./subagent-utils');
+
   // Verify Vue is loaded
   if (typeof Vue === 'undefined') {
     console.error('Vue is not loaded');
@@ -25,7 +28,7 @@
 
   console.log('Initializing Vue app...');
 
-  const { createApp, ref, computed, onMounted, onBeforeUnmount,  watch } = Vue;
+  const { createApp, ref, computed, onMounted, onBeforeUnmount, watch } = Vue;
   const { DynamicScroller, DynamicScrollerItem } = window.VueVirtualScroller;
 
   const app = createApp({
@@ -77,9 +80,30 @@
     const currentTurnIndex = ref(0);  // Current selected turn
     const scrollerRef = ref(null);
     const visibleRange = ref({ start: 0, end: 0 });
+    const selectedSubagent = ref(null); // null = all events, toolCallId = specific subagent
+    const typeFilterOpen = ref(false); // Event type dropdown open state
+
+    // Active filter count (computed)
+    const activeFilterCount = computed(() => {
+      let count = 0;
+      if (currentFilter.value !== 'all') count++;
+      if (selectedSubagent.value) count++;
+      if (searchText.value.trim()) count++;
+      return count;
+    });
+
+    // Clear all filters
+    const clearAllFilters = () => {
+      currentFilter.value = 'all';
+      selectedSubagent.value = null;
+      searchText.value = '';
+      debouncedSearchText.value = '';
+      typeFilterOpen.value = false;
+    };
 
     // Debounce search input
     let searchTimeout = null;
+    let scrollCleanup = null;
     watch(searchText, (newValue) => {
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(() => {
@@ -167,9 +191,15 @@
       return events;
     });
 
-    // Final filtered events (search + type filter)
+    // Final filtered events (search + type filter + subagent filter)
     const filteredEvents = computed(() => {
       let events = searchFilteredEvents.value;
+
+      // Apply subagent filter
+      if (selectedSubagent.value) {
+        const { ownerMap } = subagentOwnership.value;
+        events = filterBySubagent(events, selectedSubagent.value, ownerMap);
+      }
 
       // Apply type filter
       if (currentFilter.value !== 'all') {
@@ -329,122 +359,51 @@
     // Tool call map
     // Subagent ownership: attribute events to their owning subagent
     const subagentOwnership = computed(() => {
-      const sorted = flatEvents.value;
-      const ownerMap = new Map();       // stableId → toolCallId
-      const subagentInfo = new Map();   // toolCallId → { name, colorIndex }
-
-      // 1. Collect all subagent.started toolCallIds + assign colorIndex
-      let colorIdx = 0;
-      for (const ev of sorted) {
-        if (ev.type === 'subagent.started') {
-          const tcid = ev.data?.toolCallId;
-          if (tcid) {
-            subagentInfo.set(tcid, {
-              name: ev.data?.agentDisplayName || ev.data?.agentName || 'SubAgent',
-              colorIndex: colorIdx++
-            });
-          }
-        }
-      }
-
-      // 1b. VS Code source: collect subagent names from assistant.message data.subAgentName
-      // (VS Code does not emit subagent.started events; subagent identity is on the message)
-      for (const ev of sorted) {
-        if (ev.type === 'assistant.message' && ev.data?.subAgentName && ev.data?.subAgentId) {
-          const sid = ev.data.subAgentId;
-          if (!subagentInfo.has(sid)) {
-            subagentInfo.set(sid, {
-              name: ev.data.subAgentName,
-              colorIndex: colorIdx++
-            });
-          }
-          // Directly map this event to its subagent (vscode has no parentToolCallId)
-          ownerMap.set(ev.stableId, sid);
-        }
-      }
-
-      if (subagentInfo.size === 0) return { ownerMap, subagentInfo };
-
-      // 2. Build id → event lookup for parentId chain walking
-      const idMap = new Map();
-      for (const ev of sorted) {
-        if (ev.id) idMap.set(ev.id, ev);
-      }
-
-      // 3. Attribute assistant.message events via data.parentToolCallId
-      for (const ev of sorted) {
-        if (ev.type === 'assistant.message') {
-          const ptcid = ev.data?.parentToolCallId;
-          if (ptcid && subagentInfo.has(ptcid)) {
-            ownerMap.set(ev.stableId, ptcid);
-          }
-        }
-      }
-
-      // 4. Attribute reasoning events by walking parentId → assistant.message
-      for (const ev of sorted) {
-        if (ev.type !== 'reasoning') continue;
-        let current = ev.parentId;
-        let depth = 0;
-        while (current && depth < 10) {
-          const parent = idMap.get(current);
-          if (!parent) break;
-          if (parent.type === 'assistant.message') {
-            const ptcid = parent.data?.parentToolCallId;
-            if (ptcid && subagentInfo.has(ptcid)) {
-              ownerMap.set(ev.stableId, ptcid);
-            }
-            break;
-          }
-          current = parent.parentId;
-          depth++;
-        }
-      }
-
-      // 5. Attribute tool.execution_start/complete by walking parentId chain
-      const startIdByToolCallId = new Map();
-      for (const ev of sorted) {
-        if (ev.type !== 'tool.execution_start') continue;
-        let current = ev.parentId;
-        let depth = 0;
-        while (current && depth < 10) {
-          const parent = idMap.get(current);
-          if (!parent) break;
-          if (parent.type === 'assistant.message') {
-            const ptcid = parent.data?.parentToolCallId;
-            if (ptcid && subagentInfo.has(ptcid)) {
-              ownerMap.set(ev.stableId, ptcid);
-              const tcid = ev.data?.toolCallId;
-              if (tcid) startIdByToolCallId.set(tcid, ptcid);
-            }
-            break;
-          }
-          current = parent.parentId;
-          depth++;
-        }
-      }
-
-      for (const ev of sorted) {
-        if (ev.type !== 'tool.execution_complete') continue;
-        const tcid = ev.data?.toolCallId;
-        if (tcid && startIdByToolCallId.has(tcid)) {
-          ownerMap.set(ev.stableId, startIdByToolCallId.get(tcid));
-        }
-      }
-
-      // 6. Attribute tool.invocation events (VS Code format) via parentToolCallId
-      for (const ev of sorted) {
-        if (ev.type !== 'tool.invocation') continue;
-        const ptcid = ev.data?.parentToolCallId;
-        if (ptcid && subagentInfo.has(ptcid)) {
-          ownerMap.set(ev.stableId, ptcid);
-        }
-      }
-
-      return { ownerMap, subagentInfo };
+      return computeSubagentOwnership(flatEvents.value);
     });
 
-    // Methods
+    // List of subagents for the selector dropdown
+    const subagentList = computed(() => {
+      const { subagentInfo } = subagentOwnership.value;
+      if (subagentInfo.size === 0) return [];
+      const list = [];
+      for (const [toolCallId, info] of subagentInfo) {
+        list.push({ toolCallId, name: info.name, colorIndex: info.colorIndex });
+      }
+      return list;
+    });
+
+    // Token usage for the currently selected subagent (computed from events)
+    const subagentTokenUsage = computed(() => {
+      if (!selectedSubagent.value) return null;
+      const { ownerMap, subagentInfo } = subagentOwnership.value;
+      const tcid = selectedSubagent.value;
+      if (!subagentInfo.has(tcid)) return null;
+
+      let eventCount = 0;
+      let startTime = null;
+      let endTime = null;
+
+      for (const ev of flatEvents.value) {
+        // Count events belonging to this subagent
+        const isSubagentDivider = (ev.type === 'subagent.started' || ev.type === 'subagent.completed' || ev.type === 'subagent.failed') && ev.data?.toolCallId === tcid;
+        const isOwned = ownerMap.get(ev.stableId) === tcid;
+        const isSubagentMeta = ev._subagent?.id === tcid;
+        const isVsCode = ev.data?.subAgentId === tcid;
+
+        if (isSubagentDivider || isOwned || isSubagentMeta || isVsCode) {
+          eventCount++;
+          if (ev.timestamp !== null && ev.timestamp !== undefined) {
+            const t = new Date(ev.timestamp).getTime();
+            if (startTime === null || t < startTime) startTime = t;
+            if (endTime === null || t > endTime) endTime = t;
+          }
+        }
+      }
+
+      const durationMs = startTime === null || endTime === null ? 0 : endTime - startTime;
+      return { eventCount, durationMs };
+    });
     const formatTime = (timestamp) => {
       if (!timestamp) return '';
       const date = new Date(timestamp);
@@ -921,10 +880,25 @@
       currentFilter.value = type;
     };
 
+    const selectSubagent = (toolCallId) => {
+      selectedSubagent.value = toolCallId;
+      // Reset type filter only when switching into a specific subagent view
+      if (toolCallId) {
+        currentFilter.value = 'all';
+      }
+      if (window.trackClick) {
+        window.trackClick('SubagentSelected', {
+          subagent: toolCallId,
+          sessionId: sessionId.value
+        });
+      }
+    };
+
     const scrollToTurn = (turn) => {
-      // Clear search and filter when jumping to a turn
+      // Clear search, filter, and subagent selection when jumping to a turn
       searchText.value = '';
       currentFilter.value = 'all';
+      selectedSubagent.value = null;
 
       currentTurnIndex.value = turn.id;
 
@@ -1081,9 +1055,50 @@
       }
     };
 
+    const closeTypeFilter = (e) => {
+      const dropdown = document.querySelector('.filter-type-wrapper');
+      if (dropdown && !dropdown.contains(e.target)) {
+        typeFilterOpen.value = false;
+      }
+    };
+
+    const handleKeydown = (e) => {
+      if (e.ctrlKey && e.key === 'b') {
+        e.preventDefault();
+        sidebarCollapsed.value = !sidebarCollapsed.value;
+      }
+    };
+
+    onBeforeUnmount(() => {
+      document.removeEventListener('click', closeTypeFilter);
+      window.removeEventListener('keydown', handleKeydown);
+
+      // Clear search timeout (memory leak fix)
+      if (searchTimeout) {
+        clearTimeout(searchTimeout);
+        searchTimeout = null;
+      }
+
+      // Clean scroll listeners
+      if (scrollCleanup) {
+        scrollCleanup();
+        scrollCleanup = null;
+      }
+
+      // Clear expansion state (memory leak fix)
+      expandedTools.value = {};
+      expandedContent.value = {};
+
+      // Clear markdown cache (memory leak fix)
+      markdownCache.clear();
+    });
+
 
     // Lifecycle
     onMounted(async () => {
+      // Close type filter dropdown on outside click
+      document.addEventListener('click', closeTypeFilter);
+
       // Load events asynchronously
       try {
         console.log('[Navigation] Starting event loading...');
@@ -1196,12 +1211,7 @@
         eventsLoading.value = false;
       }
 
-      window.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === 'b') {
-          e.preventDefault();
-          sidebarCollapsed.value = !sidebarCollapsed.value;
-        }
-      });
+      window.addEventListener('keydown', handleKeydown);
 
       if (window.marked) {
         marked.setOptions({
@@ -1248,7 +1258,6 @@
       };
 
       // 初始更新和添加滚动监听
-      let scrollCleanup = null;
       setTimeout(() => {
         updateVisibleRange();
 
@@ -1262,26 +1271,6 @@
         }
       }, 500);
 
-      // Cleanup on unmount
-      onBeforeUnmount(() => {
-        // Clear search timeout (memory leak fix)
-        if (searchTimeout) {
-          clearTimeout(searchTimeout);
-          searchTimeout = null;
-        }
-
-        // Clean scroll listeners
-        if (scrollCleanup) {
-          scrollCleanup();
-        }
-
-        // Clear expansion state (memory leak fix)
-        expandedTools.value = {};
-        expandedContent.value = {};
-
-        // Clear markdown cache (memory leak fix)
-        markdownCache.clear();
-      });
     });
 
     // Session Tags
@@ -1582,6 +1571,14 @@
       getSubagentInfo,
       getSubagentColor,
       setFilter,
+      selectSubagent,
+      selectedSubagent,
+      subagentList,
+      subagentTokenUsage,
+      SUBAGENT_COLORS,
+      typeFilterOpen,
+      activeFilterCount,
+      clearAllFilters,
       scrollToTurn,
       scrollToTop,
       scrollToBottom,
@@ -1704,7 +1701,7 @@
 
           <!-- Usage Section -->
           <div v-if="metadata.usage" class="sidebar-section">
-            <div class="sidebar-section-title">Usage</div>
+            <div class="sidebar-section-title">Token Usage</div>
             <div class="usage-container">
               <!-- Compact view (always visible) -->
               <div class="usage-compact" @click="toggleUsage">
@@ -1769,21 +1766,6 @@
             </div>
           </div>
 
-          <div class="sidebar-section">
-            <div class="sidebar-section-title">Event Filters</div>
-            <div class="event-filters">
-              <button
-                v-for="filter in filters"
-                :key="filter.type"
-                :class="['filter-btn', { active: currentFilter === filter.type }]"
-                :disabled="filter.disabled"
-                @click="setFilter(filter.type)"
-              >
-                {{ filter.label }}
-              </button>
-            </div>
-          </div>
-
           <!-- Session Tags -->
           <div class="sidebar-section session-tags-container">
             <div class="sidebar-section-title">Tags</div>
@@ -1840,8 +1822,8 @@
         </div>
 
         <div class="content">
-          <div class="scroll-indicator">
-            <div class="content-toolbar-left">
+          <div class="unified-filter-bar">
+            <div class="filter-bar-row">
               <button
                 class="sidebar-toggle"
                 @click="() => { sidebarCollapsed = !sidebarCollapsed; trackClick && trackClick('SidebarToggled', { state: sidebarCollapsed ? 'open' : 'collapsed', sessionId: sessionId }); }"
@@ -1849,6 +1831,20 @@
               >
                 ☰
               </button>
+
+              <div class="filter-bar-search">
+                <input
+                  v-model="searchText"
+                  type="text"
+                  placeholder="🔍 Search events..."
+                  class="search-input"
+                />
+                <span v-if="searchResultCount" class="search-result-count">
+                  {{ searchResultCount }}
+                </span>
+              </div>
+
+              <div class="filter-bar-divider"></div>
 
               <!-- Turn dropdown with optgroup -->
               <select
@@ -1867,19 +1863,69 @@
                   </option>
                 </optgroup>
               </select>
+
+              <div class="filter-bar-divider"></div>
+
+              <!-- Subagent selector -->
+              <div v-if="subagentList.length > 0" class="subagent-selector">
+                <select
+                  :value="selectedSubagent || ''"
+                  @change="selectSubagent($event.target.value || null)"
+                  class="subagent-dropdown"
+                >
+                  <option value="">🤖 All Agents</option>
+                  <option v-for="sa in subagentList" :key="sa.toolCallId" :value="sa.toolCallId">
+                    🤖 {{ sa.name }}
+                  </option>
+                </select>
+                <span v-if="subagentTokenUsage" class="subagent-usage-badge">
+                  {{ subagentTokenUsage.eventCount }} events · {{ formatDuration(subagentTokenUsage.durationMs) }}
+                </span>
+              </div>
+
+              <div class="filter-bar-divider"></div>
+
+              <!-- Event type dropdown -->
+              <div class="filter-type-wrapper">
+                <button
+                  class="filter-type-toggle"
+                  :class="{ active: currentFilter !== 'all' }"
+                  @click.stop="typeFilterOpen = !typeFilterOpen"
+                >
+                  ⚡ {{ currentFilter === 'all' ? 'All Types' : currentFilter }} ▾
+                </button>
+                <div v-if="typeFilterOpen" class="filter-type-menu">
+                  <div class="filter-type-menu-header">Event Types</div>
+                  <div class="filter-type-menu-options">
+                    <div
+                      v-for="filter in filters"
+                      :key="filter.type"
+                      :class="['filter-type-menu-item', { active: currentFilter === filter.type }]"
+                      @click="setFilter(filter.type); typeFilterOpen = false"
+                    >
+                      <span class="filter-type-menu-label">{{ filter.type === 'all' ? 'All' : filter.type }}</span>
+                      <span class="filter-type-menu-count">{{ filter.count }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="content-toolbar-center">
-            </div>
-            <div class="content-toolbar-right">
-              <input
-                v-model="searchText"
-                type="text"
-                placeholder="🔍 Search events..."
-                class="search-input"
-              />
-              <span v-if="searchResultCount" class="search-result-count">
-                {{ searchResultCount }}
+
+            <!-- Active filter chips -->
+            <div v-if="activeFilterCount > 0" class="active-filters-bar">
+              <span v-if="currentFilter !== 'all'" class="filter-chip">
+                Type: {{ currentFilter }}
+                <button @click="setFilter('all')" class="filter-chip-remove" title="Remove filter">×</button>
               </span>
+              <span v-if="selectedSubagent" class="filter-chip">
+                Agent: {{ subagentList.find(s => s.toolCallId === selectedSubagent)?.name || selectedSubagent }}
+                <button @click="selectSubagent(null)" class="filter-chip-remove" title="Remove filter">×</button>
+              </span>
+              <span v-if="searchText.trim()" class="filter-chip">
+                Search: "{{ searchText.length > 20 ? searchText.substring(0, 20) + '…' : searchText }}"
+                <button @click="searchText = ''" class="filter-chip-remove" title="Remove filter">×</button>
+              </span>
+              <button class="clear-all-filters-btn" @click="clearAllFilters">Clear all</button>
             </div>
           </div>
 
@@ -1968,8 +2014,10 @@
                     <span
                       v-if="getSubagentInfo(item)"
                       class="subagent-owner-tag"
-                      :style="{ color: getSubagentColor(item), borderColor: getSubagentColor(item) }"
-                    >{{ getSubagentInfo(item).name }}</span>
+                      :style="{ '--subagent-color': getSubagentColor(item) || '#58a6ff', '--subagent-hover-bg': ((getSubagentColor(item) || '#58a6ff') + '26') }"
+                      :title="'Filter to ' + getSubagentInfo(item).name"
+                      @click.stop="selectSubagent(getSubagentInfo(item).toolCallId)"
+                    >🤖 {{ getSubagentInfo(item).name }}</span>
                     <span v-if="metadata.source !== 'vscode'" class="event-timestamp">{{ formatTime(item.timestamp) }}</span>
                   </div>
 
